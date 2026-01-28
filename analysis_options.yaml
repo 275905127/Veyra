@@ -1,0 +1,56 @@
+# This file configures the analyzer, which statically analyzes Dart code to
+# check for errors, warnings, and lints.
+#
+# The issues identified by the analyzer are surfaced in the UI of Dart-enabled
+# IDEs (https://dart.dev/tools#ides-and-editors). The analyzer can also be
+# invoked from the command line by running `flutter analyze`.
+
+# The following line activates a set of recommended lints for Flutter apps,
+# packages, and plugins designed to encourage good coding practices.
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  errors:
+    # 将某些 lint 提升为 error 级别
+    missing_return: error
+    dead_code: warning
+  exclude:
+    - "**/*.g.dart"
+    - "**/*.freezed.dart"
+    - "lib/gen_l10n/**"
+
+linter:
+  # The lint rules applied to this project can be customized in the
+  # section below to disable rules from the `package:flutter_lints/flutter.yaml`
+  # included above or to enable additional rules. A list of all available lints
+  # and their documentation is published at https://dart.dev/lints.
+  rules:
+    # === 代码质量 ===
+    prefer_const_constructors: true
+    prefer_const_declarations: true
+    prefer_final_locals: true
+    avoid_print: true
+    
+    # === 可空安全 ===
+    avoid_returning_null_for_void: true
+    null_closures: true
+    
+    # === 异步安全 ===
+    unawaited_futures: true
+    avoid_void_async: true
+    
+    # === 代码风格 ===
+    prefer_single_quotes: true
+    sort_constructors_first: false  # 禁用以避免大量重构现有代码
+    prefer_is_empty: true
+    prefer_is_not_empty: true
+    
+    # === 类型安全 ===
+    always_declare_return_types: true
+    avoid_dynamic_calls: false  # 对于 JS interop 可能需要关闭
+    
+    # === 文档 ===
+    # public_member_api_docs: true  # 可选：强制公共 API 文档
+
+# Additional information about this file can be found at
+# https://dart.dev/guides/language/analysis-options

@@ -1,0 +1,95 @@
+{
+  "@@locale": "zh",
+
+  "appName": "Veyra",
+  "@appName": {
+    "description": "应用名称"
+  },
+
+  "manageSourceTypeRule": "规则图源",
+  "@manageSourceTypeRule": { "description": "管理页：图源类型标签（规则）" },
+
+  "manageSourceTypeExtension": "引擎包图源",
+  "@manageSourceTypeExtension": { "description": "管理页：图源类型标签（引擎包）" },
+
+  "managePackDomains": "域名",
+  "@managePackDomains": { "description": "管理页：引擎包权限域名标签" },
+
+  "managePackUninstall": "卸载",
+  "@managePackUninstall": { "description": "管理页：卸载按钮文案" },
+
+  "snackInstalled": "已安装",
+  "@snackInstalled": { "description": "SnackBar：安装成功提示" },
+
+  "snackUninstalled": "已卸载",
+  "@snackUninstalled": { "description": "SnackBar：卸载成功提示" },
+
+  "tabBrowse": "浏览",
+  "@tabBrowse": { "description": "底部导航：浏览" },
+
+  "tabManage": "管理",
+  "@tabManage": { "description": "底部导航：管理" },
+
+  "tabSettings": "设置",
+  "@tabSettings": { "description": "底部导航：设置" },
+
+  "actionRefresh": "刷新",
+  "@actionRefresh": { "description": "通用：刷新" },
+
+  "actionImport": "导入",
+  "@actionImport": { "description": "通用：导入" },
+
+  "actionSearch": "搜索",
+  "@actionSearch": { "description": "通用：搜索" },
+
+  "browseTitle": "壁纸",
+  "@browseTitle": { "description": "浏览页标题" },
+
+  "manageTitle": "管理",
+  "@manageTitle": { "description": "管理页标题" },
+
+  "settingsTitle": "设置",
+  "@settingsTitle": { "description": "设置页标题" },
+
+  "manageSectionSources": "图源",
+  "@manageSectionSources": { "description": "管理页：图源分区标题" },
+
+  "manageSectionPacks": "引擎包",
+  "@manageSectionPacks": { "description": "管理页：引擎包分区标题" },
+
+  "emptyNoSourcesTitle": "暂无图源",
+  "@emptyNoSourcesTitle": { "description": "空态：无图源标题" },
+
+  "emptyNoSourcesBody": "请在“管理”中导入引擎包，或添加图源配置。",
+  "@emptyNoSourcesBody": { "description": "空态：无图源描述" },
+
+  "emptyNoPacksTitle": "暂无引擎包",
+  "@emptyNoPacksTitle": { "description": "空态：无引擎包标题" },
+
+  "emptyNoPacksBody": "点击右上角“导入”，安装一个 .zip / .enginepack。",
+  "@emptyNoPacksBody": { "description": "空态：无引擎包描述" },
+
+  "errorGenericTitle": "出错了",
+  "@errorGenericTitle": { "description": "通用错误标题" },
+
+  "errorRetry": "重试",
+  "@errorRetry": { "description": "通用：重试按钮" },
+
+  "settingsSectionGeneral": "常用",
+  "@settingsSectionGeneral": { "description": "设置页：常用分区" },
+
+  "settingsClearCache": "清理缓存",
+  "@settingsClearCache": { "description": "设置：清理缓存" },
+
+  "settingsSectionDebug": "验证与调试",
+  "@settingsSectionDebug": { "description": "设置页：调试分区" },
+
+  "settingsEnableLogs": "启用日志",
+  "@settingsEnableLogs": { "description": "设置：启用日志开关" },
+
+  "settingsSectionAbout": "关于",
+  "@settingsSectionAbout": { "description": "设置页：关于分区" },
+
+  "settingsVersion": "版本",
+  "@settingsVersion": { "description": "设置：版本" }
+}

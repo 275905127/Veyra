@@ -1,0 +1,42 @@
+{
+  "@@locale": "en",
+  "appName": "Veyra",
+
+  "tabBrowse": "Browse",
+  "tabManage": "Manage",
+  "tabSettings": "Settings",
+
+  "actionSearch": "Search",
+  "actionRefresh": "Refresh",
+  "actionImport": "Import",
+
+  "browseTitle": "Wallpapers",
+  "manageTitle": "Manage",
+  "settingsTitle": "Settings",
+
+  "manageSourceTypeRule": "Rule source",
+  "manageSourceTypeExtension": "Engine-pack source",
+  "managePackDomains": "Domains",
+  "managePackUninstall": "Uninstall",
+
+  "snackInstalled": "Installed",
+  "snackUninstalled": "Uninstalled",
+
+  "manageSectionSources": "Sources",
+  "manageSectionPacks": "Engine packs",
+
+  "emptyNoSourcesTitle": "No sources",
+  "emptyNoSourcesBody": "Import engine packs in “Manage”, or add a source spec.",
+  "emptyNoPacksTitle": "No engine packs",
+  "emptyNoPacksBody": "Tap “Import” to install a .zip / .enginepack.",
+
+  "errorGenericTitle": "Something went wrong",
+  "errorRetry": "Retry",
+
+  "settingsSectionGeneral": "General",
+  "settingsClearCache": "Clear cache",
+  "settingsSectionDebug": "Debug",
+  "settingsEnableLogs": "Enable logs",
+  "settingsSectionAbout": "About",
+  "settingsVersion": "Version"
+}
