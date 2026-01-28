@@ -180,6 +180,12 @@ class _BrowseBody extends StatelessWidget {
       // 默认策略：Referer = 协议 + 域名 (例如 https://www.pixiv.net/)
       // 大多数图床只要这个就能通过防盗链
       final origin = '${uri.scheme}://${uri.host}/';
+
+      // 🛠️ 针对 Wallspic 的特殊修复
+      // 如果图片 URL 包含 "wallspic"，强制把 Referer 设为主站
+      if (url.contains('wallspic')) {
+        referer = 'https://wallspic.com/';
+      }
       return {
         'Referer': origin,
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
