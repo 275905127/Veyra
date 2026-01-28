@@ -74,10 +74,25 @@ class _VeyraImageCardState extends State<VeyraImageCard>
       placeholder: (context, url) => const ShimmerPlaceholder(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.zero),
       ),
-      errorWidget: (context, url, error) => Container(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest,
-        child: const Icon(Icons.broken_image_rounded, color: Colors.grey),
-      ),
+      // ✅✅✅ 修改这里：把错误打印出来！
+      errorWidget: (context, url, error) {
+        // 🔴 这一步非常重要，它会告诉我们真相
+        print("--------------------------------------------------");
+        print("❌ 图片挂了: $url");
+        print("❌ 错误原因: $error");
+        if (error.toString().contains("403")) {
+           print("💡 提示: 403 表示 Referer 被服务器拒绝了");
+        }
+        if (error.toString().contains("Handshake")) {
+           print("💡 提示: 证书/SSL错误，可能是VPN或网络问题");
+        }
+        print("--------------------------------------------------");
+
+        return Container(
+          color: Theme.of(context).colorScheme.surfaceContainerHighest,
+          child: const Icon(Icons.broken_image_rounded, color: Colors.grey),
+        );
+      },
     );
 
     Widget content = ClipRRect(
