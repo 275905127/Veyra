@@ -177,18 +177,25 @@ class _BrowseBody extends StatelessWidget {
     if (url.isEmpty) return const {};
     try {
       final uri = Uri.parse(url);
-      // 默认策略：Referer = 协议 + 域名 (例如 https://www.pixiv.net/)
-      // 大多数图床只要这个就能通过防盗链
-      final origin = '${uri.scheme}://${uri.host}/';
+      // === 1. 默认策略 ===
+      // 适用于 LuvBree 和大多数普通图源
+      String referer = '${uri.scheme}://${uri.host}/';
 
-      // 🛠️ 针对 Wallspic 的特殊修复
-      // 如果图片 URL 包含 "wallspic"，强制把 Referer 设为主站
+      // === 2. 特殊图源规则表 ===
+      
+      // [Wallspic] 必须是主站域名
       if (url.contains('wallspic')) {
         referer = 'https://wallspic.com/';
       }
+      // [Pixiv] 建议强制设为主站 (更稳妥，虽然目前不加也能用)
+      else if (url.contains('pximg') || url.contains('pixiv')) {
+        referer = 'https://www.pixiv.net/';
+      }
+
       return {
-        'Referer': origin,
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': referer,
+        'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
       };
     } catch (_) {
       return const {};
