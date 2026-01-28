@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_js/flutter_js.dart';
-
 import 'package:injectable/injectable.dart';
 
 import '../exceptions/app_exception.dart';
@@ -62,16 +61,12 @@ class ExtensionEngine {
     required Map<String, dynamic> params,
     CancelToken? cancelToken,
   }) async {
-    // ============================
-    // 注入 API Keys（从 params 获取）
-    // ============================
     final apiKeysMap = (params['apiKeys'] as Map<String, dynamic>?) ?? <String, dynamic>{};
 
     final mergedParams = <String, dynamic>{
       ...params,
-      ...apiKeysMap, // 展开注入
+      ...apiKeysMap,
     };
-    // 移除 apiKeys 键避免重复
     mergedParams.remove('apiKeys');
 
     logger?.i(
@@ -89,19 +84,10 @@ class ExtensionEngine {
         details: 'id=${pack.id} entry=${pack.entry} domains=${pack.domains.join(",")}',
       );
 
-      // ============================
-      // 获取或创建缓存的 JS 运行时
-      // ============================
       final rt = await _getOrCreateRuntime(packId, pack);
 
-      // ============================
-      // buildRequests(params)
-      // ============================
-      final dynamic rawReq =
-          rt.callJson('buildRequests', <dynamic>[mergedParams]);
-
-      final List<ExtensionRequestSpec> requests =
-          _parseRequests(rawReq);
+      final dynamic rawReq = rt.callJson('buildRequests', <dynamic>[mergedParams]);
+      final List<ExtensionRequestSpec> requests = _parseRequests(rawReq);
 
       logger?.d(
         'ExtensionEngine',
@@ -113,7 +99,7 @@ class ExtensionEngine {
 
       for (final req in requests) {
         _assertDomainAllowed(pack, req.url);
-
+        
         logger?.d(
           'ExtensionEngine',
           'request',
@@ -127,13 +113,9 @@ class ExtensionEngine {
           'response',
           details: 'status=${resp.statusCode} len=${resp.body.length}',
         );
-
         responses.add(resp);
       }
 
-      // ============================
-      // parseList(params, responses)
-      // ============================
       final dynamic rawList = rt.callJson(
         'parseList',
         <dynamic>[
@@ -165,7 +147,6 @@ class ExtensionEngine {
 
       return out;
     } on DioException catch (e, st) {
-      // 取消请求不算错误
       if (e.type == DioExceptionType.cancel) {
         logger?.d('ExtensionEngine', 'Request cancelled');
         return const <UniWallpaper>[];
@@ -198,19 +179,39 @@ class ExtensionEngine {
   // =====================================================
 
   /// 获取或创建缓存的 JS 运行时
+  /// ✅ 修改：增加文件修改时间检查，解决重新导入后缓存不刷新的问题
   Future<_JsHost> _getOrCreateRuntime(String packId, EnginePack pack) async {
     final cached = _runtimeCache[packId];
-    
-    // 检查缓存是否有效
-    if (cached != null && 
-        cached.packVersion == pack.version && 
-        !cached.isExpired) {
+
+    // 1. 获取磁盘文件的最后修改时间
+    // 这步操作非常快，可以确保如果我们刚刚覆盖了文件，这里能感知到
+    DateTime? fileLastModified;
+    File? entryFile;
+    try {
+      entryFile = await packStore.resolveEntry(packId, pack.entry);
+      fileLastModified = (await entryFile.stat()).modified;
+    } catch (_) {
+      // 文件可能不存在，后面读取时会报错，这里先忽略
+    }
+
+    // 2. 检查缓存是否有效
+    bool isCacheValid = false;
+    if (cached != null && cached.packVersion == pack.version && !cached.isExpired) {
+      isCacheValid = true;
+      // ✅ 关键判断：如果磁盘文件修改时间 晚于 缓存创建时间，说明文件更新了，缓存失效
+      if (fileLastModified != null && fileLastModified.isAfter(cached.createdAt)) {
+        logger?.d('ExtensionEngine', 'File changed on disk, invalidating cache', details: 'packId=$packId');
+        isCacheValid = false;
+      }
+    }
+
+    if (isCacheValid) {
       logger?.d(
         'ExtensionEngine',
         'Using cached JS runtime',
         details: 'packId=$packId version=${pack.version}',
       );
-      return cached.runtime;
+      return cached!.runtime;
     }
 
     // 清理旧缓存
@@ -219,14 +220,15 @@ class ExtensionEngine {
       _runtimeCache.remove(packId);
       logger?.d(
         'ExtensionEngine',
-        'Cleared expired JS runtime cache',
+        'Cleared expired/stale JS runtime cache',
         details: 'packId=$packId',
       );
     }
 
     // 创建新运行时
-    final File entryFile = await packStore.resolveEntry(packId, pack.entry);
-    final String jsSource = await entryFile.readAsString();
+    // 注意：如果 entryFile 上面没解析成功，这里再调一次 resolveEntry 抛出异常是预期的
+    final fileToRead = entryFile ?? await packStore.resolveEntry(packId, pack.entry);
+    final String jsSource = await fileToRead.readAsString();
 
     final rt = _JsHost(logger: logger);
     rt.load(jsSource, sourceUrl: pack.entry);
@@ -247,7 +249,6 @@ class ExtensionEngine {
     return rt;
   }
 
-  /// 清除指定 pack 的运行时缓存
   void clearRuntimeCache(String packId) {
     final cached = _runtimeCache.remove(packId);
     if (cached != null) {
@@ -256,7 +257,6 @@ class ExtensionEngine {
     }
   }
 
-  /// 清除所有运行时缓存
   void clearAllRuntimeCache() {
     for (final entry in _runtimeCache.entries) {
       entry.value.runtime.dispose();
@@ -290,7 +290,6 @@ class ExtensionEngine {
 
   void _assertDomainAllowed(EnginePack pack, String url) {
     if (pack.domains.isEmpty) return;
-
     final host = Uri.parse(url).host;
     final ok = pack.domains.any((d) => host == d || host.endsWith('.$d'));
     if (!ok) {
@@ -303,7 +302,6 @@ class ExtensionEngine {
     CancelToken? cancelToken,
   }) async {
     final method = req.method.toUpperCase();
-
     final options = Options(
       method: method,
       responseType: ResponseType.plain,
@@ -334,9 +332,7 @@ class ExtensionEngine {
     );
   }
 
-  /// 释放资源
   void dispose() {
-    // 清理所有缓存的 JS 运行时
     clearAllRuntimeCache();
     _dio.close();
     logger?.d('ExtensionEngine', 'disposed');
@@ -396,12 +392,9 @@ class _JsHost {
     return jsonDecode(s);
   }
 
-  /// 释放 JS 运行时资源
   void dispose() {
     if (_disposed) return;
     _disposed = true;
-    // flutter_js 的 JavascriptRuntime 没有 dispose 方法
-    // 但我们标记为已释放以防止后续使用
     logger?.d('JsHost', 'disposed');
   }
 }
