@@ -1,29 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:provider/provider.dart';
 
 import '../../core/models/uni_wallpaper.dart';
-import '../../core/log/logger_store.dart'; // ⬅️ 你把 LoggerStore 放在哪就改成对应路径
+import '../../core/log/logger_store.dart';
 
 class ViewerPage extends StatelessWidget {
   final UniWallpaper wallpaper;
 
-  /// ✅ 注入内置日志（不注入也能跑，只是不写面板日志）
-  final LoggerStore? logger;
-
   const ViewerPage({
     super.key,
     required this.wallpaper,
-    this.logger,
   });
 
-  void _logD(String msg, {String? details}) {
-    // tag 统一用 ViewerPage，方便你在日志面板里搜索
-    logger?.d('ViewerPage', msg, details: details);
-  }
-
-  /// ✅ 动态 Header：防盗链真正有效的 Referer
-  /// - Wallspic/Akspic：Referer 必须是 https://wallspic.com/（不是 img*.wallspic.com）
-  /// - Pixiv：pximg 必须配 https://www.pixiv.net/
   Map<String, String> _getDynamicHeaders(String url) {
     if (url.isEmpty) return const {};
     try {
@@ -32,19 +21,18 @@ class ViewerPage extends StatelessWidget {
       // 默认：用目标 host 的 origin
       String referer = '${uri.scheme}://${uri.host}/';
 
-      // ✅ Wallspic / Akspic：用主站 Referer
+      // ✅ Wallspic/Akspic：强制主站 referer（不要用 img1/img2/img3 的 referer）
       if (url.contains('wallspic.com') || url.contains('akspic.ru')) {
         referer = 'https://wallspic.com/';
       }
 
-      // ✅ Pixiv：pximg 必须配 pixiv.net Referer
+      // ✅ Pixiv(pximg)：必须配 pixiv.net Referer
       if (url.contains('pximg') || url.contains('pixiv')) {
         referer = 'https://www.pixiv.net/';
       }
 
       return {
         'Referer': referer,
-        // ✅ 用手机 UA 更稳
         'User-Agent':
             'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36',
         'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
@@ -57,26 +45,27 @@ class ViewerPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final heroTag = wallpaper.id.isNotEmpty ? wallpaper.id : wallpaper.fullUrl;
+    // ✅ 自动从 Provider 取 LoggerStore（不再依赖外面传参）
+    final logger = context.read<LoggerStore>();
 
+    final heroTag = wallpaper.id.isNotEmpty ? wallpaper.id : wallpaper.fullUrl;
     final thumbUrl =
         wallpaper.thumbUrl.isNotEmpty ? wallpaper.thumbUrl : wallpaper.fullUrl;
-
     final fullUrl = wallpaper.fullUrl;
 
     final fullHeaders = _getDynamicHeaders(fullUrl);
     final thumbHeaders = _getDynamicHeaders(thumbUrl);
 
-    // ✅ 写入内置日志面板（你没有控制台也能看）
-    _logD(
-      'Open viewer',
+    logger.d(
+      'ViewerPage',
+      'Open',
       details: [
         'id=${wallpaper.id}',
         'size=${wallpaper.width}x${wallpaper.height}',
-        'fullUrl=$fullUrl',
-        'fullHeaders=$fullHeaders',
         'thumbUrl=$thumbUrl',
         'thumbHeaders=$thumbHeaders',
+        'fullUrl=$fullUrl',
+        'fullHeaders=$fullHeaders',
       ].join('\n'),
     );
 
@@ -84,7 +73,7 @@ class ViewerPage extends StatelessWidget {
       backgroundColor: Colors.black,
       extendBodyBehindAppBar: true,
       appBar: AppBar(
-        backgroundColor: Colors.black.withValues(alpha: 0.3),
+        backgroundColor: Colors.black.withOpacity(0.3),
         foregroundColor: Colors.white,
         elevation: 0,
         title: Text(
@@ -103,38 +92,57 @@ class ViewerPage extends StatelessWidget {
               imageUrl: fullUrl,
               httpHeaders: fullHeaders,
               fit: BoxFit.contain,
-              placeholder: (c, url) => CachedNetworkImage(
+
+              // ✅ 大图加载过程中：先用缩略图占位
+              placeholder: (_, __) => CachedNetworkImage(
                 imageUrl: thumbUrl,
                 httpHeaders: thumbHeaders,
                 fit: BoxFit.contain,
                 placeholder: (_, __) => const Center(
                   child: CircularProgressIndicator(color: Colors.white),
                 ),
-                errorWidget: (_, __, ___) {
-                  _logD(
-                    'Thumb load error',
-                    details: 'thumbUrl=$thumbUrl\nthumbHeaders=$thumbHeaders',
+                errorWidget: (_, url, error) {
+                  logger.e(
+                    'ViewerPage',
+                    'Thumb error',
+                    details: 'url=$url\nerror=$error\nheaders=$thumbHeaders',
                   );
                   return const SizedBox.shrink();
                 },
               ),
-              errorWidget: (c, url, error) {
-                _logD(
-                  'Full load error',
-                  details: [
-                    'url=$url',
-                    'error=$error',
-                    'fullUrl=$fullUrl',
-                    'fullHeaders=$fullHeaders',
-                  ].join('\n'),
+
+              // ✅ 大图加载失败
+              errorWidget: (_, url, error) {
+                logger.e(
+                  'ViewerPage',
+                  'Full error',
+                  details: 'url=$url\nerror=$error\nheaders=$fullHeaders',
                 );
+
                 return const Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     Icon(Icons.broken_image, color: Colors.white, size: 48),
                     SizedBox(height: 8),
-                    Text('无法加载图片 (403/404)', style: TextStyle(color: Colors.white)),
+                    Text(
+                      '无法加载图片 (403/404)',
+                      style: TextStyle(color: Colors.white),
+                    ),
                   ],
+                );
+              },
+
+              // ✅ 大图加载成功：打日志（注意：CachedNetworkImage 没有 onSuccess 回调，
+              // 这里用 imageBuilder 作为“成功”的信号）
+              imageBuilder: (_, imageProvider) {
+                logger.i(
+                  'ViewerPage',
+                  'Full loaded',
+                  details: 'fullUrl=$fullUrl',
+                );
+                return Image(
+                  image: imageProvider,
+                  fit: BoxFit.contain,
                 );
               },
             ),
