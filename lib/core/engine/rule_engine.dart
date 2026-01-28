@@ -5,6 +5,7 @@ import '../models/uni_wallpaper.dart';
 import 'engine_registry.dart';
 
 class RuleEngineContext {
+  // ✅ 1. 恢复为空，我们在 UI 层根据 URL 动态生成
   Map<String, String> get commonImageHeaders => const <String, String>{};
 }
 
@@ -22,7 +23,6 @@ class RuleEngine {
     String? keyword,
     Map<String, dynamic>? filters,
   }) async {
-    // stub: 先返回空，后面我们再接真正 RuleEngine
     return const <UniWallpaper>[];
   }
 }
