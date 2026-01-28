@@ -1,12 +1,11 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:provider/provider.dart';
 
-import '../../core/log/logger_store.dart';
 import '../../core/models/uni_wallpaper.dart';
+import '../../core/log/logger_store.dart';
 
 class ViewerPage extends StatefulWidget {
   final UniWallpaper wallpaper;
@@ -21,36 +20,55 @@ class ViewerPage extends StatefulWidget {
 }
 
 class _ViewerPageState extends State<ViewerPage> {
-  // 当前尝试的 URL 列表
-  late final List<String> _candidates;
+  static const _tag = 'ViewerPage';
+
+  late final LoggerStore _log;
+
+  // 候选 URL（会按顺序尝试）
+  late final List<_Candidate> _candidates;
+
   int _idx = 0;
-
-  // 用于强制刷新图片（避免 CachedNetworkImage 复用旧状态）
-  Key _imgKey = UniqueKey();
-
-  LoggerStore? _log;
+  bool _showingThumb = false;
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _log ??= context.read<LoggerStore>();
+    _log = context.read<LoggerStore>();
+
+    _candidates = _buildCandidates(widget.wallpaper);
+
+    // 打开即打日志（你现在就是靠这个排错）
+    _log.d(
+      _tag,
+      'Open',
+      details: [
+        'id=${widget.wallpaper.id}',
+        'size=${widget.wallpaper.width}x${widget.wallpaper.height}',
+        'thumbUrl=${widget.wallpaper.thumbUrl}',
+        'fullUrl=${widget.wallpaper.fullUrl}',
+        'candidates=${_candidates.map((e) => e.name).toList()}',
+      ].join('\n'),
+    );
   }
 
-  Map<String, String> _getDynamicHeaders(String url) {
+  // ✅ 动态 Headers：尽量“按目标域自动算 Referer”，同时 UA 统一手机 UA
+  Map<String, String> _headersForUrl(String url) {
     if (url.isEmpty) return const {};
     try {
       final uri = Uri.parse(url);
+      final origin = '${uri.scheme}://${uri.host}/';
 
-      // 代理域（weserv）一般不需要 Referer，但给了也无妨
-      // 真实图域（img*.wallspic.com）需要 Referer 才不容易被挡
-      String referer = '${uri.scheme}://${uri.host}/';
-      if (url.contains('wallspic')) referer = 'https://wallspic.com/';
+      // 特殊修正：Wallspic 防盗链常要求 referer 指向主站（而不是 img3 子域）
+      // 你已验证列表页 referer 用 https://wallspic.com/ 是 OK 的
+      String referer = origin;
+      if (uri.host.contains('wallspic.com')) {
+        referer = 'https://wallspic.com/';
+      }
 
-      return <String, String>{
+      return {
         'Referer': referer,
         'User-Agent':
             'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36',
-        // 有些 CDN 对 Accept 更敏感，补一个
         'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
       };
@@ -59,163 +77,142 @@ class _ViewerPageState extends State<ViewerPage> {
     }
   }
 
-  /// 如果你用了 weserv 代理：
-  /// https://images.weserv.nl/?url=img3.wallspic.com/previews/...
-  /// 这里把原始 url 解出来，方便推导真实地址
-  String _unwrapWeserv(String u) {
-    try {
-      final uri = Uri.parse(u);
-      if (uri.host != 'images.weserv.nl') return u;
-      final raw = uri.queryParameters['url'];
-      if (raw == null || raw.isEmpty) return u;
+  // ✅ 针对 Wallspic：从缩略图推导“更可能存在的非 500x 版本”
+  // 注意：你日志里 404 的 fullUrl 本质是 “thumb 去掉 -500x 后” => 该资源不存在
+  // 所以这里只当一个候选，不强依赖它一定存在。
+  String _tryUpgradeFromThumb(String thumbUrl) {
+    if (thumbUrl.isEmpty) return thumbUrl;
 
-      // weserv 的 url 通常不带协议
-      if (raw.startsWith('http://') || raw.startsWith('https://')) return raw;
-      return 'https://$raw';
-    } catch (_) {
-      return u;
-    }
+    // 常见：...-500x.jpg => ... .jpg
+    final upgraded = thumbUrl.replaceAll(RegExp(r'-500x(\.[a-zA-Z0-9]+)$'), r'$1');
+    return upgraded;
   }
 
-  List<String> _buildCandidates(UniWallpaper w) {
-    final out = <String>[];
-    void add(String? u) {
-      if (u == null) return;
-      final s = u.trim();
-      if (s.isEmpty) return;
-      if (!out.contains(s)) out.add(s);
+  // ✅ 如果你 JS 端用了 weserv 代理：这里也能从直链生成一个“代理候选”
+  // 但注意：是否允许代理、代理是否稳定，不在这里争论；这里只做候选兜底。
+  String _toWeserv(String url) {
+    if (url.isEmpty) return url;
+    final raw = url.replaceFirst(RegExp(r'^https?://'), '');
+    return 'https://images.weserv.nl/?url=${Uri.encodeComponent(raw)}&n=-1';
+  }
+
+  List<_Candidate> _buildCandidates(UniWallpaper w) {
+    final thumb = (w.thumbUrl.isNotEmpty) ? w.thumbUrl : w.fullUrl;
+    final full = w.fullUrl;
+
+    // 去重保持顺序
+    final seen = <String>{};
+    void add(List<_Candidate> out, String name, String url) {
+      final u = url.trim();
+      if (u.isEmpty) return;
+      if (seen.contains(u)) return;
+      seen.add(u);
+      out.add(_Candidate(name: name, url: u));
     }
 
-    // 1) 先用 fullUrl（你传进来的）
-    add(w.fullUrl);
+    final out = <_Candidate>[];
 
-    // 2) 再用 thumbUrl（至少能显示）
-    add(w.thumbUrl);
+    // 1) 先尝试 fullUrl（来源给的“原始”）
+    add(out, 'full', full);
 
-    // 3) 对 raw（如果是 weserv 代理，先解出来）
-    final rawFull = _unwrapWeserv(w.fullUrl);
-    final rawThumb = _unwrapWeserv(w.thumbUrl);
+    // 2) 如果 fullUrl 本身就是 thumb（或疑似预览），尝试从 thumb 升级
+    final upgraded = _tryUpgradeFromThumb(thumb);
+    add(out, 'thumb_upgraded', upgraded);
 
-    // 4) 基于 raw 做推导
-    for (final base in <String>[rawFull, rawThumb]) {
-      if (base.isEmpty) continue;
+    // 3) thumb 本身（至少能看）
+    add(out, 'thumb', thumb);
 
-      // A: 去掉 -500x
-      add(base.replaceAllMapped(
-        RegExp(r'-500x(\.[a-z0-9]+)$', caseSensitive: false),
-        (m) => m.group(1) ?? '',
-      ));
-
-      // B: previews -> wallpapers
-      if (base.contains('/previews/')) {
-        final no500 = base.replaceAllMapped(
-          RegExp(r'-500x(\.[a-z0-9]+)$', caseSensitive: false),
-          (m) => m.group(1) ?? '',
-        );
-        add(no500.replaceFirst('/previews/', '/wallpapers/'));
-        add(no500.replaceFirst('/previews/', '/originals/'));
-      }
-
-      // C: imgX 域名可能轮换（img1/img2/img3），做个轻量替换
-      // 只对 wallspic 的 img 域做，避免误伤
-      if (base.contains('.wallspic.com/')) {
-        add(base.replaceFirst('img1.wallspic.com', 'img2.wallspic.com'));
-        add(base.replaceFirst('img1.wallspic.com', 'img3.wallspic.com'));
-        add(base.replaceFirst('img2.wallspic.com', 'img1.wallspic.com'));
-        add(base.replaceFirst('img2.wallspic.com', 'img3.wallspic.com'));
-        add(base.replaceFirst('img3.wallspic.com', 'img1.wallspic.com'));
-        add(base.replaceFirst('img3.wallspic.com', 'img2.wallspic.com'));
-      }
-    }
-
-    // 5) 如果你仍然要走代理（weserv），把推导结果再包一层代理
-    // 这样在你网络对 img*.wallspic.com reset 的情况下，依然有机会加载
-    for (final u in List<String>.from(out)) {
-      final raw = _unwrapWeserv(u);
-      if (raw.contains('.wallspic.com/') && !u.contains('images.weserv.nl')) {
-        final stripped = raw.replaceFirst(RegExp(r'^https?://'), '');
-        final proxied =
-            'https://images.weserv.nl/?url=${Uri.encodeComponent(stripped)}&n=-1';
-        add(proxied);
-      }
-    }
+    // 4) 代理兜底（对任何源都通用：把候选再各自加一份 weserv）
+    // 只要你环境允许走这个域名，它就是最后一层兜底。
+    add(out, 'full_weserv', _toWeserv(full));
+    add(out, 'upgraded_weserv', _toWeserv(upgraded));
+    add(out, 'thumb_weserv', _toWeserv(thumb));
 
     return out;
   }
 
-  void _logOpen() {
-    final w = widget.wallpaper;
-    final msg = StringBuffer()
-      ..writeln('Open')
-      ..writeln('id=${w.id}')
-      ..writeln('size=${w.width}x${w.height}')
-      ..writeln('thumbUrl=${w.thumbUrl}')
-      ..writeln('fullUrl=${w.fullUrl}')
-      ..writeln('candidates=${_candidates.length}');
-    _log?.d('ViewerPage', msg.toString());
-  }
+  void _onImageError(Object error) {
+    final cur = _candidates[_idx];
+    final headers = _headersForUrl(cur.url);
 
-  void _logFail(Object error, String url, Map<String, String> headers) {
-    _log?.e(
-      'ViewerPage',
-      'Load failed',
-      details: 'url=$url\nerror=$error\nheaders=$headers',
+    // 记录错误（你需要的就是这个）
+    _log.e(
+      _tag,
+      'Load error',
+      details: [
+        'candidate=${cur.name}',
+        'idx=$_idx/${_candidates.length - 1}',
+        'url=${cur.url}',
+        'error=$error',
+        'headers=$headers',
+      ].join('\n'),
     );
-  }
 
-  void _nextCandidate() {
-    if (!mounted) return;
-    if (_idx + 1 >= _candidates.length) return;
+    // 自动回退到下一个候选
+    if (_idx < _candidates.length - 1) {
+      setState(() {
+        _idx += 1;
+        // 当走到 thumb/相关候选时，标记一下 UI 状态（可选）
+        _showingThumb = _candidates[_idx].name.contains('thumb');
+      });
 
-    setState(() {
-      _idx += 1;
-      _imgKey = UniqueKey();
-    });
-
-    _log?.w(
-      'ViewerPage',
-      'Retry next candidate',
-      details: 'idx=$_idx\nurl=${_candidates[_idx]}',
-    );
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    _candidates = _buildCandidates(widget.wallpaper);
-    // initState 里拿不到 Provider，所以日志放到 didChangeDependencies 之后
-    scheduleMicrotask(() {
-      if (!mounted) return;
-      _logOpen();
-      _log?.d('ViewerPage', 'Try first', details: 'url=${_candidates[_idx]}');
-    });
+      final next = _candidates[_idx];
+      _log.w(
+        _tag,
+        'Fallback',
+        details: 'switch_to=${next.name}\nurl=${next.url}',
+      );
+    } else {
+      // 已经无路可退
+      _log.e(
+        _tag,
+        'Exhausted',
+        details: 'no_more_candidates',
+      );
+      setState(() {
+        _showingThumb = true;
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final w = widget.wallpaper;
-    final heroTag = w.id.isNotEmpty ? w.id : (w.fullUrl.isNotEmpty ? w.fullUrl : w.thumbUrl);
+    final heroTag = w.id.isNotEmpty ? w.id : w.fullUrl;
 
-    final url = _candidates.isEmpty ? '' : _candidates[_idx];
-    final headers = _getDynamicHeaders(url);
+    final cur = _candidates[_idx];
+    final curHeaders = _headersForUrl(cur.url);
+
+    final titleText = '${w.width} × ${w.height}'
+        '${_showingThumb ? '（预览）' : ''}'
+        '  ${cur.name}';
 
     return Scaffold(
       backgroundColor: Colors.black,
       extendBodyBehindAppBar: true,
       appBar: AppBar(
-        backgroundColor: Colors.black.withValues(alpha: 0.3),
+        backgroundColor: Colors.black.withValues(alpha: 0.35),
         foregroundColor: Colors.white,
         elevation: 0,
-        title: Text(
-          '${w.width} × ${w.height}',
-          style: const TextStyle(fontSize: 14),
-        ),
         centerTitle: true,
+        title: Text(
+          titleText,
+          style: const TextStyle(fontSize: 12),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
         actions: [
           IconButton(
-            tooltip: '下一个候选链接',
+            tooltip: '重试/下一个候选',
             icon: const Icon(Icons.refresh),
-            onPressed: _nextCandidate,
+            onPressed: () {
+              _log.i(_tag, 'Manual retry', details: 'idx=$_idx name=${cur.name}');
+              setState(() {
+                // 手动点：优先换到下一个；如果已经最后一个就回到第一个
+                _idx = (_idx + 1) % _candidates.length;
+                _showingThumb = _candidates[_idx].name.contains('thumb');
+              });
+            },
           ),
         ],
       ),
@@ -226,39 +223,29 @@ class _ViewerPageState extends State<ViewerPage> {
             minScale: 0.5,
             maxScale: 4.0,
             child: CachedNetworkImage(
-              key: _imgKey,
-              imageUrl: url,
-              httpHeaders: headers,
+              imageUrl: cur.url,
+              httpHeaders: curHeaders,
               fit: BoxFit.contain,
+              fadeInDuration: const Duration(milliseconds: 120),
+              fadeOutDuration: const Duration(milliseconds: 120),
+              // 兜底：显示一个加载指示
               placeholder: (_, __) => const Center(
                 child: CircularProgressIndicator(color: Colors.white),
               ),
               errorWidget: (_, __, error) {
-                _logFail(error, url, headers);
+                // 这里不要直接 return 错误 UI ——先触发回退
+                // 但 CachedNetworkImage 的 errorWidget 不能异步 setState 里再 build 返回，
+                // 所以用 microtask 触发回退，再暂时显示一个轻量占位。
+                scheduleMicrotask(() => _onImageError(error));
 
-                // 自动尝试下一个候选
-                // 这里用 microtask 避免在 build 中 setState
-                scheduleMicrotask(_nextCandidate);
-
-                return Column(
+                return const Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const Icon(Icons.broken_image, color: Colors.white, size: 48),
-                    const SizedBox(height: 8),
+                    Icon(Icons.broken_image, color: Colors.white, size: 48),
+                    SizedBox(height: 8),
                     Text(
-                      '无法加载图片（${_idx + 1}/${_candidates.length}）',
-                      style: const TextStyle(color: Colors.white),
-                    ),
-                    const SizedBox(height: 8),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 18),
-                      child: Text(
-                        url,
-                        style: const TextStyle(color: Colors.white54, fontSize: 12),
-                        maxLines: 4,
-                        overflow: TextOverflow.ellipsis,
-                        textAlign: TextAlign.center,
-                      ),
+                      '加载失败，正在尝试备用链接…',
+                      style: TextStyle(color: Colors.white70),
                     ),
                   ],
                 );
@@ -269,4 +256,10 @@ class _ViewerPageState extends State<ViewerPage> {
       ),
     );
   }
+}
+
+class _Candidate {
+  final String name;
+  final String url;
+  const _Candidate({required this.name, required this.url});
 }
