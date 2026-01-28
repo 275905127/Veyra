@@ -40,9 +40,9 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-         flutter-version: "3.22.0"
-         cache: true
-         cache-key: flutter
+          flutter-version: "3.29.0"
+          cache: true
+          cache-key: flutter-${{ runner.os }}-3.29.0
 
       - name: Cache Gradle
         uses: actions/cache@v4
@@ -62,8 +62,8 @@ jobs:
 
       - name: Verify l10n output
         run: |
-         ls -la lib/gen_l10n || true
-         sed -n '1,40p' lib/gen_l10n/app_localizations.dart || true
+          ls -la lib/gen_l10n || true
+          sed -n '1,40p' lib/gen_l10n/app_localizations.dart || true
 
       - name: Flutter Analyze
         run: flutter analyze --no-pub
