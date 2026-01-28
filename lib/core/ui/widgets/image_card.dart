@@ -3,14 +3,15 @@ import 'package:flutter/material.dart';
 
 import 'shimmer_placeholder.dart';
 
-/// 一个集成了 Hero、Shimmer 加载和按压反馈的高级图片卡片
 class VeyraImageCard extends StatefulWidget {
   final String imageUrl;
   final String heroTag;
   final VoidCallback? onTap;
   final double? aspectRatio;
   final BoxFit fit;
-  final int? memCacheWidth; // 内存优化
+  final int? memCacheWidth;
+  // ✅ 新增：接收请求头
+  final Map<String, String>? headers;
 
   const VeyraImageCard({
     super.key,
@@ -20,6 +21,7 @@ class VeyraImageCard extends StatefulWidget {
     this.aspectRatio,
     this.fit = BoxFit.cover,
     this.memCacheWidth,
+    this.headers, // ✅ 构造函数加入
   });
 
   @override
@@ -67,7 +69,8 @@ class _VeyraImageCardState extends State<VeyraImageCard>
     Widget image = CachedNetworkImage(
       imageUrl: widget.imageUrl,
       fit: widget.fit,
-      memCacheWidth: widget.memCacheWidth, // 内存优化
+      memCacheWidth: widget.memCacheWidth,
+      httpHeaders: widget.headers, // ✅ 传给 CachedNetworkImage
       placeholder: (context, url) => const ShimmerPlaceholder(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.zero),
       ),
@@ -77,8 +80,6 @@ class _VeyraImageCardState extends State<VeyraImageCard>
       ),
     );
 
-    // 只有在 Hero 动画飞行时，不需要 ClipRRect（为了性能），但在静止时需要圆角
-    // 这里我们直接切圆角
     Widget content = ClipRRect(
       borderRadius: BorderRadius.circular(12),
       child: widget.aspectRatio != null
@@ -86,11 +87,9 @@ class _VeyraImageCardState extends State<VeyraImageCard>
           : image,
     );
 
-    // Hero 包裹
     content = Hero(
       tag: widget.heroTag,
       child: content,
-      // 避免 Hero 飞行时带有非 Material 的样式（如文字下划线等），虽然这里只是图片
       flightShuttleBuilder: (
         flightContext,
         animation,
@@ -98,7 +97,6 @@ class _VeyraImageCardState extends State<VeyraImageCard>
         fromHeroContext,
         toHeroContext,
       ) {
-        // 飞行时保持圆角
         return ClipRRect(
           borderRadius: BorderRadius.circular(12),
           child: fromHeroContext.widget,
@@ -106,7 +104,6 @@ class _VeyraImageCardState extends State<VeyraImageCard>
       },
     );
 
-    // 按压反馈包裹
     return AnimatedBuilder(
       animation: _scaleAnimation,
       builder: (context, child) => Transform.scale(
