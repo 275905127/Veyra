@@ -81,7 +81,7 @@ class _VeyraImageCardState extends State<VeyraImageCard>
     );
 
     Widget content = ClipRRect(
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.circular(6),
       child: widget.aspectRatio != null
           ? AspectRatio(aspectRatio: widget.aspectRatio!, child: image)
           : image,
@@ -98,7 +98,7 @@ class _VeyraImageCardState extends State<VeyraImageCard>
         toHeroContext,
       ) {
         return ClipRRect(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(6),
           child: fromHeroContext.widget,
         );
       },
