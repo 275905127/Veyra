@@ -196,10 +196,10 @@ class _BrowseBody extends StatelessWidget {
     if (loading && items.isEmpty) {
       return MasonryGridView.count(
         physics: const NeverScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+        padding: const EdgeInsets.fromLTRB(8, 12, 8, 24),
         crossAxisCount: 2,
-        mainAxisSpacing: 12,
-        crossAxisSpacing: 12,
+        mainAxisSpacing: 8,
+        crossAxisSpacing: 8,
         itemCount: 12,
         itemBuilder: (context, index) {
           final aspect = index.isEven ? 0.7 : 1.0;
@@ -240,10 +240,10 @@ class _BrowseBody extends StatelessWidget {
       child: MasonryGridView.count(
         controller: scrollController,
         physics: physics,
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+        padding: const EdgeInsets.fromLTRB(8, 12, 8, 24),
         crossAxisCount: 2,
-        mainAxisSpacing: 12,
-        crossAxisSpacing: 12,
+        mainAxisSpacing: 8,
+        crossAxisSpacing: 8,
         itemCount: items.length + 1,
         itemBuilder: (context, index) {
           if (index == items.length) {
