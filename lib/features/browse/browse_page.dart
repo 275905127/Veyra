@@ -171,31 +171,24 @@ class _BrowseBody extends StatelessWidget {
     required this.onRefresh,
   });
 
-  /// ✅ 关键修改：根据 URL 动态生成 Headers
-  /// 这使得 App 可以自动适配 Pixiv、Wallhaven 等不同防盗链策略
+  /// ✅ 兜底策略：如果 JS 没传 Headers，这个函数会作为后备方案
   Map<String, String> _getDynamicHeaders(String url) {
     if (url.isEmpty) return const {};
     try {
       final uri = Uri.parse(url);
-      // === 1. 默认策略 ===
-      // 适用于 LuvBree 和大多数普通图源
+      
+      // 1. 自动计算 Referer
       String referer = '${uri.scheme}://${uri.host}/';
 
-      // === 2. 特殊图源规则表 ===
-      
-      // [Wallspic] 必须是主站域名
-      if (url.contains('wallspic')) {
-        referer = 'https://wallspic.com/';
-      }
-      // [Pixiv] 建议强制设为主站 (更稳妥，虽然目前不加也能用)
-      else if (url.contains('pximg') || url.contains('pixiv')) {
-        referer = 'https://www.pixiv.net/';
-      }
+      // 特殊修正
+      if (url.contains('wallspic')) referer = 'https://wallspic.com/';
+      if (url.contains('pximg') || url.contains('pixiv')) referer = 'https://www.pixiv.net/';
 
       return {
         'Referer': referer,
+        // ✅ 统一使用 Android 手机 UA，防止被 Wallspic 等图源拦截
         'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36',
       };
     } catch (_) {
       return const {};
@@ -278,14 +271,27 @@ class _BrowseBody extends StatelessWidget {
           final url = (w.thumbUrl.isNotEmpty ? w.thumbUrl : w.fullUrl).trim();
           if (url.isEmpty) return const SizedBox.shrink();
 
-          // ✅ 1. 计算动态 Headers
-          final headers = _getDynamicHeaders(url);
+          // ------------------------------------------------------
+          // ✅ 核心修改：智能 Headers 决策系统
+          // ------------------------------------------------------
+          Map<String, String>? headers;
+
+          // 1. 优先使用 JS 引擎传来的配置 (如果 main.js 里写了 headers: {...})
+          // 注意：如果你的 UniWallpaper 模型还没加 headers 字段，这里会报错，请先改 UniWallpaper
+          if (w.headers != null && w.headers!.isNotEmpty) {
+            headers = w.headers;
+          } 
+          // 2. 如果 JS 没传，使用 Dart 本地兜底逻辑 (兼容老图源)
+          else {
+            headers = _getDynamicHeaders(url);
+          }
+          // ------------------------------------------------------
 
           return VeyraImageCard(
             imageUrl: url,
             heroTag: w.id.isNotEmpty ? w.id : w.fullUrl,
             memCacheWidth: 400,
-            headers: headers, // ✅ 2. 传入 Headers (确保你已按之前步骤更新了 ImageCard 支持此参数)
+            headers: headers, // ✅ 传入最终决定的 Headers
             aspectRatio: (w.width > 0 && w.height > 0)
                 ? (w.width / w.height)
                 : 1.0,
