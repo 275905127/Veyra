@@ -14,7 +14,6 @@ class SourceController extends ChangeNotifier {
     required this.sourceStore,
     required this.packStore,
   }) {
-    // SourceStore 变化时（active 或 sources 更新），同步刷新 sources 列表
     sourceStore.addListener(_onSourceStoreChanged);
   }
 
@@ -23,7 +22,6 @@ class SourceController extends ChangeNotifier {
 
   bool _disposed = false;
 
-  /// 从持久化仓库加载图源列表
   Future<void> load() async {
     try {
       final list = await sourceStore.listRefs();
@@ -32,16 +30,36 @@ class SourceController extends ChangeNotifier {
         ..addAll(list);
       if (!_disposed) notifyListeners();
     } catch (e) {
-      // 这里不抛异常，避免 UI 崩；需要的话后续接 LoggerStore
       _sources.clear();
       if (!_disposed) notifyListeners();
     }
   }
 
+  /// ✅ 新增：级联删除图源和对应的引擎包
+  Future<void> deleteSource(String sourceId) async {
+    try {
+      // 1. 获取图源配置，找到对应的 packId
+      final spec = await sourceStore.getSpecRaw(sourceId);
+      final packId = (spec['packId'] ?? spec['pack'] ?? '').toString();
+
+      // 2. 从图源列表移除配置
+      await sourceStore.remove(sourceId);
+
+      // 3. 如果有 packId，卸载对应的引擎包文件
+      if (packId.isNotEmpty) {
+        await packStore.uninstall(packId);
+      }
+
+      // 4. 刷新列表
+      await load();
+    } catch (e) {
+      debugPrint('Delete source failed: $e');
+      rethrow;
+    }
+  }
+
   void _onSourceStoreChanged() {
-    // 避免在 dispose 后触发
     if (_disposed) return;
-    // 触发一次异步刷新即可
     load();
   }
 
