@@ -1,8 +1,6 @@
-﻿
 import 'package:flutter/material.dart';
 import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import 'package:provider/provider.dart';
-
 
 import '../../core/models/source.dart';
 import '../../core/models/uni_wallpaper.dart';
@@ -26,7 +24,6 @@ class BrowsePage extends StatefulWidget {
 
 class _BrowsePageState extends State<BrowsePage> {
   BrowseController? _controller;
-
   String? _boundActiveId;
   bool _bindingScheduled = false;
 
@@ -42,10 +39,7 @@ class _BrowsePageState extends State<BrowsePage> {
   void dispose() {
     _scrollCtrl.removeListener(_onScroll);
     _scrollCtrl.dispose();
-
-    // ✅ 重要：controller 也要 dispose（避免监听器泄漏）
     _controller?.dispose();
-
     super.dispose();
   }
 
@@ -53,9 +47,7 @@ class _BrowsePageState extends State<BrowsePage> {
     final c = _controller;
     if (c == null) return;
     if (!_scrollCtrl.hasClients) return;
-
     final pos = _scrollCtrl.position;
-    // 接近底部就加载更多
     if (pos.pixels >= pos.maxScrollExtent - 320) {
       c.loadMore();
     }
@@ -64,8 +56,6 @@ class _BrowsePageState extends State<BrowsePage> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-
-    // 只初始化一次 controller（不要在这里 watch）
     _controller ??= BrowseController(
       wallpaperService: context.read<WallpaperService>(),
       sourceStore: context.read<SourceStore>(),
@@ -75,7 +65,6 @@ class _BrowsePageState extends State<BrowsePage> {
   void _syncActiveToController(SourceRef? active) {
     final c = _controller;
     if (c == null) return;
-
     final activeId = active?.id;
     if (activeId == _boundActiveId) return;
     _boundActiveId = activeId;
@@ -86,72 +75,53 @@ class _BrowsePageState extends State<BrowsePage> {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       _bindingScheduled = false;
       if (!mounted || _controller == null) return;
-
       if (active == null) {
         _controller!.resetToEmpty();
         return;
       }
-
       await _controller!.setSource(active);
     });
   }
 
   Future<void> _openFilterSheet(SourceRef active) async {
-  final c = _controller;
-  if (c == null) return;
+    final c = _controller;
+    if (c == null) return;
+    final sourceStore = context.read<SourceStore>();
+    final packStore = context.read<PackStore>();
+    final apiKeyStore = context.read<ApiKeyStore>();
 
-  // ✅ 关键：提前取出 store
-  final sourceStore = context.read<SourceStore>();
-  final packStore = context.read<PackStore>();
-  final apiKeyStore = context.read<ApiKeyStore>();
+    Map<String, dynamic> specRaw = const <String, dynamic>{};
+    try {
+      specRaw = await sourceStore.getSpecRaw(active.id);
+    } catch (_) {
+      specRaw = const <String, dynamic>{};
+    }
 
-  Map<String, dynamic> specRaw = const <String, dynamic>{};
-  try {
-    specRaw = await sourceStore.getSpecRaw(active.id);
-  } catch (_) {
-    specRaw = const <String, dynamic>{};
+    if (!mounted) return;
+    final result = await showModalBottomSheet<Map<String, dynamic>>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => FilterSheet(
+        sourceId: active.id,
+        specRaw: specRaw,
+        initialFilters: c.filters,
+        packStore: packStore,
+        apiKeyStore: apiKeyStore,
+      ),
+    );
+
+    if (!mounted || result == null) return;
+    await c.setQuery(filters: result, refreshNow: true);
   }
-
-  if (!mounted) return;
-
-  final result = await showModalBottomSheet<Map<String, dynamic>>(
-    context: context,
-    isScrollControlled: true,
-    showDragHandle: false, // FilterSheet 自己有了 handle UI 或者我们用系统自带的 handle
-    // 这里我们用系统自带的吧？之前的 FilterSheet 自绘了 handle。
-    // 如果用系统自带的，可以删掉 FilterSheet 里的 handle UI。
-    // 既然 FilterSheet 是 DraggableScrollableSheet，我们可以不在这里开 showDragHandle=true。
-    // 但是 DraggableScrollableSheet 在 showModalBottomSheet 里通常需要。
-    // 无论如何，新 FilterSheet 内部画了个 handle。这里设为 true 会有两个 handle。
-    // 设为 false 比较安全。
-    // 注意：filter_sheet.dart 使用 DraggableScrollableSheet，
-    // 它通常作为 showModalBottomSheet 的 child 且 isScrollControlled: true。
-    backgroundColor: Colors.transparent, // 让 sheet 自己控制背景
-    builder: (_) => FilterSheet(
-      sourceId: active.id,
-      specRaw: specRaw,
-      initialFilters: c.filters,
-      packStore: packStore,
-      apiKeyStore: apiKeyStore,
-    ),
-  );
-
-  if (!mounted || result == null) return;
-
-  await c.setQuery(filters: result, refreshNow: true);
-} // End of _openFilterSheet
 
   @override
   Widget build(BuildContext context) {
-    // ... (unchanged)
     final c = _controller;
     if (c == null) return const SizedBox.shrink();
 
-    // active 变化时触发同步
     final active = context.watch<SourceStore>().active;
     _syncActiveToController(active);
-
-    final headers = context.read<WallpaperService>().commonImageHeaders;
 
     return ChangeNotifierProvider.value(
       value: c,
@@ -160,14 +130,12 @@ class _BrowsePageState extends State<BrowsePage> {
           children: <Widget>[
             _BrowseBody(
               scrollController: _scrollCtrl,
-              commonHeaders: headers,
               items: c.items,
               loading: c.loading,
               error: c.error,
               onRetry: c.refresh,
               onRefresh: c.refresh,
             ),
-
             if (active != null)
               Positioned(
                 right: 16,
@@ -185,21 +153,17 @@ class _BrowsePageState extends State<BrowsePage> {
     );
   }
 }
-// 恢复 _BrowseBody
+
 class _BrowseBody extends StatelessWidget {
   final ScrollController scrollController;
-  final Map<String, String> commonHeaders;
-
   final List<UniWallpaper> items;
   final bool loading;
   final String? error;
-
   final Future<void> Function() onRefresh;
   final VoidCallback onRetry;
 
   const _BrowseBody({
     required this.scrollController,
-    required this.commonHeaders,
     required this.items,
     required this.loading,
     required this.error,
@@ -207,11 +171,28 @@ class _BrowseBody extends StatelessWidget {
     required this.onRefresh,
   });
 
+  /// ✅ 关键修改：根据 URL 动态生成 Headers
+  /// 这使得 App 可以自动适配 Pixiv、Wallhaven 等不同防盗链策略
+  Map<String, String> _getDynamicHeaders(String url) {
+    if (url.isEmpty) return const {};
+    try {
+      final uri = Uri.parse(url);
+      // 默认策略：Referer = 协议 + 域名 (例如 https://www.pixiv.net/)
+      // 大多数图床只要这个就能通过防盗链
+      final origin = '${uri.scheme}://${uri.host}/';
+      return {
+        'Referer': origin,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      };
+    } catch (_) {
+      return const {};
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final s = S.of(context);
 
-    // 1. 全屏骨架屏加载态
     if (loading && items.isEmpty) {
       return MasonryGridView.count(
         physics: const NeverScrollableScrollPhysics(),
@@ -221,7 +202,6 @@ class _BrowseBody extends StatelessWidget {
         crossAxisSpacing: 12,
         itemCount: 12,
         itemBuilder: (context, index) {
-          // 模拟瀑布流高低错落
           final aspect = index.isEven ? 0.7 : 1.0;
           return AspectRatio(
             aspectRatio: aspect,
@@ -240,9 +220,7 @@ class _BrowseBody extends StatelessWidget {
       );
     }
 
-    // RefreshIndicator 要“永远可滚动”
     const physics = AlwaysScrollableScrollPhysics();
-
     if (items.isEmpty) {
       return RefreshIndicator(
         onRefresh: onRefresh,
@@ -257,7 +235,6 @@ class _BrowseBody extends StatelessWidget {
       );
     }
 
-    // 瀑布流
     return RefreshIndicator(
       onRefresh: onRefresh,
       child: MasonryGridView.count(
@@ -288,10 +265,14 @@ class _BrowseBody extends StatelessWidget {
           final url = (w.thumbUrl.isNotEmpty ? w.thumbUrl : w.fullUrl).trim();
           if (url.isEmpty) return const SizedBox.shrink();
 
+          // ✅ 1. 计算动态 Headers
+          final headers = _getDynamicHeaders(url);
+
           return VeyraImageCard(
             imageUrl: url,
             heroTag: w.id.isNotEmpty ? w.id : w.fullUrl,
             memCacheWidth: 400,
+            headers: headers, // ✅ 2. 传入 Headers (确保你已按之前步骤更新了 ImageCard 支持此参数)
             aspectRatio: (w.width > 0 && w.height > 0)
                 ? (w.width / w.height)
                 : 1.0,
@@ -308,4 +289,3 @@ class _BrowseBody extends StatelessWidget {
     );
   }
 }
-
