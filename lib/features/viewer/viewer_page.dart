@@ -11,17 +11,38 @@ class ViewerPage extends StatelessWidget {
     required this.wallpaper,
   });
 
-  /// ✅ 复制过来的动态 Header 生成逻辑
-  /// 详情页同样需要 Referer 才能下载大图
+  /// ✅ 动态 Header：针对防盗链做“真实可用”的 Referer 修正
+  /// - Wallspic/akspic：通常要求 Referer=主站域名，而不是 img*.wallspic.com
+  /// - Pixiv：pximg 必须配 Referer=https://www.pixiv.net/
   Map<String, String> _getDynamicHeaders(String url) {
     if (url.isEmpty) return const {};
     try {
       final uri = Uri.parse(url);
-      final origin = '${uri.scheme}://${uri.host}/';
+
+      // 默认：用目标 host 的 origin
+      String referer = '${uri.scheme}://${uri.host}/';
+
+      // ✅ Wallspic / Akspic 特判：用主站 Referer
+      if (url.contains('wallspic.com') || url.contains('akspic.ru')) {
+        // 建议用主站根域；也可以换成 https://wallspic.com/cn
+        referer = 'https://wallspic.com/';
+      }
+
+      // ✅ Pixiv 特判：pximg 必须配 pixiv.net Referer
+      if (url.contains('pximg') || url.contains('pixiv')) {
+        referer = 'https://www.pixiv.net/';
+      }
+
       return {
-        'Referer': origin,
+        'Referer': referer,
+
+        // ✅ 建议使用手机 UA（有些图源会按 UA 策略拦 Windows UA）
         'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36',
+
+        // 可选：有些站更挑 header，补齐 Accept/Language 更稳
+        'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
       };
     } catch (_) {
       return const {};
@@ -30,21 +51,30 @@ class ViewerPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 优先使用 ID 作为 Hero Tag
+    // 优先用 ID 作为 Hero tag
     final heroTag = wallpaper.id.isNotEmpty ? wallpaper.id : wallpaper.fullUrl;
-    final thumbUrl = wallpaper.thumbUrl.isNotEmpty ? wallpaper.thumbUrl : wallpaper.fullUrl;
+
+    // thumbUrl 为空就回退 fullUrl（避免空）
+    final thumbUrl =
+        wallpaper.thumbUrl.isNotEmpty ? wallpaper.thumbUrl : wallpaper.fullUrl;
+
     final fullUrl = wallpaper.fullUrl;
 
-    // ✅ 为大图和缩略图生成 Headers
+    // ✅ 为大图/缩略图生成 header
     final fullHeaders = _getDynamicHeaders(fullUrl);
-    // 缩略图可能来自不同域名（虽然 Pixiv 通常是一样的），为了保险也算一下
     final thumbHeaders = _getDynamicHeaders(thumbUrl);
+
+    // ✅ 日志：你点开大图后看控制台，就能确认 Referer 是否正确
+    debugPrint('ViewerPage FULL_URL=$fullUrl');
+    debugPrint('ViewerPage FULL_HDR=$fullHeaders');
+    debugPrint('ViewerPage THMB_URL=$thumbUrl');
+    debugPrint('ViewerPage THMB_HDR=$thumbHeaders');
 
     return Scaffold(
       backgroundColor: Colors.black,
-      extendBodyBehindAppBar: true, // 沉浸式
+      extendBodyBehindAppBar: true,
       appBar: AppBar(
-        backgroundColor: Colors.black.withValues(alpha: 0.3), // 半透明
+        backgroundColor: Colors.black.withValues(alpha: 0.3),
         foregroundColor: Colors.white,
         elevation: 0,
         title: Text(
@@ -61,28 +91,28 @@ class ViewerPage extends StatelessWidget {
             maxScale: 4.0,
             child: CachedNetworkImage(
               imageUrl: fullUrl,
-              httpHeaders: fullHeaders, // ✅ 传入大图 Headers
+              httpHeaders: fullHeaders,
               fit: BoxFit.contain,
-              // 使用缩略图作为占位，平滑过渡
               placeholder: (c, url) => CachedNetworkImage(
                 imageUrl: thumbUrl,
-                httpHeaders: thumbHeaders, // ✅ 传入缩略图 Headers
+                httpHeaders: thumbHeaders,
                 fit: BoxFit.contain,
-                // 缩略图本身还在加载时的占位
                 placeholder: (_, __) => const Center(
                   child: CircularProgressIndicator(color: Colors.white),
                 ),
                 errorWidget: (_, __, ___) => const SizedBox.shrink(),
               ),
-              errorWidget: (c, _, error) {
-                // 打印错误方便调试
-                debugPrint('ViewerPage Load Error: $error');
+              errorWidget: (c, url, error) {
+                debugPrint('ViewerPage Load Error url=$url error=$error');
                 return const Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     Icon(Icons.broken_image, color: Colors.white, size: 48),
                     SizedBox(height: 8),
-                    Text('无法加载图片 (403/404)', style: TextStyle(color: Colors.white)),
+                    Text(
+                      '无法加载图片 (403/404)',
+                      style: TextStyle(color: Colors.white),
+                    ),
                   ],
                 );
               },
