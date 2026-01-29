@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../../pack/pack_controller.dart';
+import 'pack_controller.dart';
 
 class PackEditorPage extends StatefulWidget {
   final String packId;
