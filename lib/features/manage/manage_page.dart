@@ -185,17 +185,31 @@ class _SourceTile extends StatelessWidget {
         children: [
           /// ✏️ 编辑按钮
           IconButton(
-            tooltip: '编辑引擎包',
-            icon: const Icon(Icons.edit),
-            onPressed: () {
+           tooltip: '编辑引擎包',
+           icon: const Icon(Icons.edit),
+           onPressed: () async {
+            try {
+              final store = context.read<SourceStore>();
+              final raw = await store.getSpecRaw(source.id);
+              final packId =
+               (raw['packId'] ?? raw['pack'] ?? source.ref).toString().trim();
+
+              if (!context.mounted) return;
+
               Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => PackEditorPage(packId: source.ref),
-                ),
-              );
-            },
-          ),
+               context,
+               MaterialPageRoute(
+               builder: (_) => PackEditorPage(packId: packId),
+              ),
+             );
+            } catch (e) {
+              if (!context.mounted) return;
+             ScaffoldMessenger.of(context).showSnackBar(
+               SnackBar(content: Text('读取 packId 失败: $e')),
+      );
+    }
+  },
+),
 
           /// 🗑 删除按钮
           IconButton(
