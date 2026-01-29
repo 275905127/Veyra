@@ -7,8 +7,8 @@ import '../../gen_l10n/app_localizations.dart';
 import '../pack/pack_controller.dart';
 import '../source/source_controller.dart';
 
-// ✅ 新增：编辑器页面
-import '../../pack/pack_editor_page.dart';
+// ✅ 编辑器页面（注意：ManagePage 在 features/manage/ 下，所以这里是 ../pack/）
+import '../pack/pack_editor_page.dart';
 
 class ManagePage extends StatelessWidget {
   const ManagePage({super.key});
@@ -108,11 +108,15 @@ class _HintCard extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  Text(title,
-                      style: Theme.of(context).textTheme.titleSmall),
+                  Text(
+                    title,
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
                   const SizedBox(height: 6),
-                  Text(body,
-                      style: Theme.of(context).textTheme.bodyMedium),
+                  Text(
+                    body,
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
                 ],
               ),
             ),
@@ -179,37 +183,39 @@ class _SourceTile extends StatelessWidget {
         await context.read<SourceStore>().setActive(source);
       },
 
-      // ✅ 右侧两个按钮：编辑 + 删除
+      /// 右侧两个按钮：编辑 + 删除
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           /// ✏️ 编辑按钮
           IconButton(
-           tooltip: '编辑引擎包',
-           icon: const Icon(Icons.edit),
-           onPressed: () async {
-            try {
-              final store = context.read<SourceStore>();
-              final raw = await store.getSpecRaw(source.id);
-              final packId =
-               (raw['packId'] ?? raw['pack'] ?? source.ref).toString().trim();
+            tooltip: '编辑引擎包',
+            icon: const Icon(Icons.edit),
+            onPressed: () async {
+              try {
+                final store = context.read<SourceStore>();
+                final raw = await store.getSpecRaw(source.id);
 
-              if (!context.mounted) return;
+                final packId = (raw['packId'] ?? raw['pack'] ?? source.ref)
+                    .toString()
+                    .trim();
 
-              Navigator.push(
-               context,
-               MaterialPageRoute(
-               builder: (_) => PackEditorPage(packId: packId),
-              ),
-             );
-            } catch (e) {
-              if (!context.mounted) return;
-             ScaffoldMessenger.of(context).showSnackBar(
-               SnackBar(content: Text('读取 packId 失败: $e')),
-      );
-    }
-  },
-),
+                if (!context.mounted) return;
+
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => PackEditorPage(packId: packId),
+                  ),
+                );
+              } catch (e) {
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('读取 packId 失败: $e')),
+                );
+              }
+            },
+          ),
 
           /// 🗑 删除按钮
           IconButton(
@@ -220,8 +226,9 @@ class _SourceTile extends StatelessWidget {
                 context: context,
                 builder: (ctx) => AlertDialog(
                   title: const Text('删除图源'),
-                  content:
-                      Text('确定要删除 "${source.name}" 吗？\n这将同时卸载对应的引擎包文件。'),
+                  content: Text(
+                    '确定要删除 "${source.name}" 吗？\n这将同时卸载对应的引擎包文件。',
+                  ),
                   actions: [
                     TextButton(
                       onPressed: () => Navigator.pop(ctx, false),
@@ -229,8 +236,10 @@ class _SourceTile extends StatelessWidget {
                     ),
                     TextButton(
                       onPressed: () => Navigator.pop(ctx, true),
-                      child:
-                          const Text('删除', style: TextStyle(color: Colors.red)),
+                      child: const Text(
+                        '删除',
+                        style: TextStyle(color: Colors.red),
+                      ),
                     ),
                   ],
                 ),
@@ -238,9 +247,7 @@ class _SourceTile extends StatelessWidget {
 
               if (confirm == true && context.mounted) {
                 try {
-                  await context
-                      .read<SourceController>()
-                      .deleteSource(source.id);
+                  await context.read<SourceController>().deleteSource(source.id);
 
                   if (context.mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
