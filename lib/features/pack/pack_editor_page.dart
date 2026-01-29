@@ -1,4 +1,7 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_code_editor/flutter_code_editor.dart';
 import 'package:highlight/languages/javascript.dart';
 import 'package:provider/provider.dart';
@@ -30,6 +33,9 @@ class _PackEditorPageState extends State<PackEditorPage> {
   bool _showFind = false;
   bool _caseSensitive = false;
 
+  bool _dirty = false;
+  String _loadedSnapshot = '';
+
   // listener helpers
   String _lastText = '';
   TextSelection _lastSel = const TextSelection.collapsed(offset: 0);
@@ -58,9 +64,14 @@ class _PackEditorPageState extends State<PackEditorPage> {
       final pc = context.read<PackController>();
       final code = await pc.loadEntryCode(widget.packId);
       if (!mounted) return;
+
       _mutating = true;
       _code.text = code;
       _code.selection = TextSelection.collapsed(offset: _code.text.length);
+
+      _loadedSnapshot = code;
+      _dirty = false;
+
       _lastText = _code.text;
       _lastSel = _code.selection;
     } catch (e) {
@@ -81,6 +92,10 @@ class _PackEditorPageState extends State<PackEditorPage> {
       final pc = context.read<PackController>();
       await pc.saveEntryCode(widget.packId, _code.text);
       if (!mounted) return;
+
+      _loadedSnapshot = _code.text;
+      _dirty = false;
+
       ScaffoldMessenger.of(context)
           .showSnackBar(const SnackBar(content: Text('已保存')));
     } catch (e) {
@@ -93,6 +108,29 @@ class _PackEditorPageState extends State<PackEditorPage> {
     }
   }
 
+  Future<bool> _confirmDiscardIfDirty() async {
+    if (!_dirty) return true;
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('未保存更改'),
+        content: const Text('有未保存的修改，确定要退出吗？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('退出', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+    return ok == true;
+  }
+
   // =========================
   // Editor Enhancements
   // =========================
@@ -103,8 +141,8 @@ class _PackEditorPageState extends State<PackEditorPage> {
     final newText = _code.text;
     final newSel = _code.selection;
 
-    // Auto features only when editing (not just selection change)
     if (newText != _lastText) {
+      _dirty = (newText != _loadedSnapshot);
       _autoIndent(newText, newSel);
       _autoPair(newText, newSel);
     }
@@ -117,7 +155,6 @@ class _PackEditorPageState extends State<PackEditorPage> {
     if (_mutating) return;
     if (!newSel.isCollapsed) return;
 
-    // detect a single '\n' insertion
     final oldText = _lastText;
     final oldSel = _lastSel;
     if (!oldSel.isCollapsed) return;
@@ -125,23 +162,17 @@ class _PackEditorPageState extends State<PackEditorPage> {
     final o = oldSel.baseOffset;
     final n = newSel.baseOffset;
 
-    // Most common: cursor moved +1 when inserting '\n'
     if (n != o + 1) return;
     if (o < 0 || o > oldText.length) return;
     if (n < 0 || n > newText.length) return;
 
-    // oldText: ... |cursor| ...
-    // newText should have '\n' at position o
     if (o >= newText.length) return;
     if (newText[o] != '\n') return;
 
-    // find previous line start in newText (before inserted '\n')
     final prevLineStart = newText.lastIndexOf('\n', o - 1) + 1;
     final prevLine = newText.substring(prevLineStart, o);
 
     final indent = RegExp(r'^[ \t]+').firstMatch(prevLine)?.group(0) ?? '';
-
-    // extra indent when previous line ends with { (ignoring spaces)
     final trimmed = prevLine.trimRight();
     final extra = trimmed.endsWith('{') ? '  ' : '';
 
@@ -163,14 +194,12 @@ class _PackEditorPageState extends State<PackEditorPage> {
     if (_mutating) return;
     if (!newSel.isCollapsed) return;
 
-    final oldText = _lastText;
     final oldSel = _lastSel;
     if (!oldSel.isCollapsed) return;
 
     final o = oldSel.baseOffset;
     final n = newSel.baseOffset;
 
-    // detect single char insertion at cursor
     if (n != o + 1) return;
     if (o < 0 || o >= newText.length) return;
 
@@ -178,14 +207,10 @@ class _PackEditorPageState extends State<PackEditorPage> {
     final pair = _pairFor(inserted);
     if (pair == null) return;
 
-    // don't auto-pair if next char already the closer
     final nextChar = (n < newText.length) ? newText[n] : '';
     if (nextChar == pair) return;
 
-    // special: for quotes, if we're already inside word/escaping, keep simple
-    // (still okay, but avoids annoying doubles on contractions)
-    if ((inserted == '"' || inserted == "'" || inserted == '`') &&
-        o - 1 >= 0) {
+    if ((inserted == '"' || inserted == "'" || inserted == '`') && o - 1 >= 0) {
       final prev = newText[o - 1];
       if (RegExp(r'[A-Za-z0-9_\\]').hasMatch(prev)) return;
     }
@@ -254,7 +279,6 @@ class _PackEditorPageState extends State<PackEditorPage> {
       _selectRange(i, i + q.length);
       return;
     }
-    // wrap
     final w = t.indexOf(q, 0);
     if (w >= 0) {
       _selectRange(w, w + q.length);
@@ -279,7 +303,6 @@ class _PackEditorPageState extends State<PackEditorPage> {
       _selectRange(i, i + q.length);
       return;
     }
-    // wrap
     final w = t.lastIndexOf(q);
     if (w >= 0) {
       _selectRange(w, w + q.length);
@@ -327,7 +350,10 @@ class _PackEditorPageState extends State<PackEditorPage> {
     final rep = _replaceCtrl.text;
     final text = _code.text;
 
-    final out = _caseSensitive ? text.replaceAll(q0, rep) : _replaceAllCaseInsensitive(text, q0, rep);
+    final out = _caseSensitive
+        ? text.replaceAll(q0, rep)
+        : _replaceAllCaseInsensitive(text, q0, rep);
+
     if (out == text) {
       ScaffoldMessenger.of(context)
           .showSnackBar(const SnackBar(content: Text('没有可替换项')));
@@ -337,7 +363,7 @@ class _PackEditorPageState extends State<PackEditorPage> {
     _mutating = true;
     try {
       _code.text = out;
-      _code.selection = TextSelection.collapsed(offset: 0);
+      _code.selection = const TextSelection.collapsed(offset: 0);
     } finally {
       _mutating = false;
     }
@@ -346,21 +372,19 @@ class _PackEditorPageState extends State<PackEditorPage> {
   }
 
   String _replaceAllCaseInsensitive(String text, String needle, String rep) {
-    final t = text;
-    final n = needle;
-    final tl = t.toLowerCase();
-    final nl = n.toLowerCase();
+    final tl = text.toLowerCase();
+    final nl = needle.toLowerCase();
     int i = 0;
     final sb = StringBuffer();
     while (true) {
       final k = tl.indexOf(nl, i);
       if (k < 0) {
-        sb.write(t.substring(i));
+        sb.write(text.substring(i));
         break;
       }
-      sb.write(t.substring(i, k));
+      sb.write(text.substring(i, k));
       sb.write(rep);
-      i = k + n.length;
+      i = k + needle.length;
     }
     return sb.toString();
   }
@@ -376,7 +400,8 @@ class _PackEditorPageState extends State<PackEditorPage> {
     final start = sel.start;
     final end = sel.end;
 
-    int lineStart = text.lastIndexOf('\n', (start - 1).clamp(0, text.length)) + 1;
+    int lineStart =
+        text.lastIndexOf('\n', (start - 1).clamp(0, text.length)) + 1;
     int lineEnd = end;
     if (lineEnd < text.length) {
       final nextNl = text.indexOf('\n', lineEnd);
@@ -402,7 +427,6 @@ class _PackEditorPageState extends State<PackEditorPage> {
           newLines.add(line.substring(1));
           delta -= 1;
         } else if (line.startsWith(' ')) {
-          // remove up to 2 leading spaces
           final cut = line.startsWith('  ') ? 2 : 1;
           newLines.add(line.substring(cut));
           delta -= cut;
@@ -416,10 +440,11 @@ class _PackEditorPageState extends State<PackEditorPage> {
 
     _mutating = true;
     try {
-      _code.text = text.substring(0, lineStart) + replaced + text.substring(lineEnd);
+      _code.text =
+          text.substring(0, lineStart) + replaced + text.substring(lineEnd);
 
-      // selection adjust (best-effort)
-      final newStart = (start + (!outdent ? indent.length : 0)).clamp(0, _code.text.length);
+      final newStart =
+          (start + (!outdent ? indent.length : 0)).clamp(0, _code.text.length);
       final newEnd = (end + delta).clamp(0, _code.text.length);
       _code.selection = TextSelection(baseOffset: newStart, extentOffset: newEnd);
     } finally {
@@ -433,12 +458,13 @@ class _PackEditorPageState extends State<PackEditorPage> {
     final sel = _code.selection;
     const tab = '  ';
 
+    if (!sel.isCollapsed) {
+      _indentSelection(outdent: false);
+      return;
+    }
+
     _mutating = true;
     try {
-      if (!sel.isCollapsed) {
-        _indentSelection(outdent: false);
-        return;
-      }
       final i = sel.baseOffset.clamp(0, text.length);
       _code.text = text.substring(0, i) + tab + text.substring(i);
       _code.selection = TextSelection.collapsed(offset: i + tab.length);
@@ -504,7 +530,6 @@ class _PackEditorPageState extends State<PackEditorPage> {
 
   List<_Diag> _basicJsDiagnostics(String src) {
     final out = <_Diag>[];
-
     final stack = <_Open>[];
 
     bool inS = false; // '
@@ -528,7 +553,11 @@ class _PackEditorPageState extends State<PackEditorPage> {
           (top.ch == '[' && ch == ']') ||
           (top.ch == '{' && ch == '}');
       if (!ok) {
-        out.add(_Diag('括号不匹配: ${top.ch} 在 line ${top.line}, col ${top.col}；这里是 $ch', line, col));
+        out.add(_Diag(
+          '括号不匹配: ${top.ch} 在 line ${top.line}, col ${top.col}；这里是 $ch',
+          line,
+          col,
+        ));
       }
     }
 
@@ -544,7 +573,6 @@ class _PackEditorPageState extends State<PackEditorPage> {
         continue;
       }
 
-      // comments handling
       if (!inS && !inD && !inT) {
         if (!inBlockC && !inLineC && ch == '/' && next == '/') {
           inLineC = true;
@@ -570,7 +598,6 @@ class _PackEditorPageState extends State<PackEditorPage> {
         continue;
       }
 
-      // strings
       if (inS || inD || inT) {
         if (esc) {
           esc = false;
@@ -605,7 +632,6 @@ class _PackEditorPageState extends State<PackEditorPage> {
         }
       }
 
-      // brackets
       if (ch == '(' || ch == '[' || ch == '{') {
         push(ch);
       } else if (ch == ')' || ch == ']' || ch == '}') {
@@ -629,7 +655,7 @@ class _PackEditorPageState extends State<PackEditorPage> {
   }
 
   // =========================
-  // UI
+  // UI helpers
   // =========================
 
   void _toggleFind() {
@@ -639,55 +665,174 @@ class _PackEditorPageState extends State<PackEditorPage> {
     }
   }
 
+  void _toggleReplace() {
+    if (!_showFind) {
+      setState(() => _showFind = true);
+      Future.microtask(() => _focus.requestFocus());
+    }
+  }
+
+  // =========================
+  // Shortcuts
+  // =========================
+
+  Map<ShortcutActivator, Intent> _shortcuts() {
+    final isApple = Platform.isMacOS || Platform.isIOS;
+    final primary = isApple ? LogicalKeyboardKey.meta : LogicalKeyboardKey.control;
+
+    return <ShortcutActivator, Intent>{
+      SingleActivator(primary, key: LogicalKeyboardKey.keyS): const _SaveIntent(),
+      SingleActivator(primary, key: LogicalKeyboardKey.keyF): const _FindIntent(),
+      SingleActivator(primary, key: LogicalKeyboardKey.keyH): const _ReplaceIntent(),
+      const SingleActivator(LogicalKeyboardKey.escape): const _EscIntent(),
+
+      const SingleActivator(LogicalKeyboardKey.tab): const _TabIntent(),
+      const SingleActivator(LogicalKeyboardKey.tab, shift: true): const _ShiftTabIntent(),
+
+      // optional: F3 / Shift+F3 next/prev
+      const SingleActivator(LogicalKeyboardKey.f3): const _FindNextIntent(),
+      const SingleActivator(LogicalKeyboardKey.f3, shift: true): const _FindPrevIntent(),
+    };
+  }
+
+  Map<Type, Action<Intent>> _actions() {
+    return <Type, Action<Intent>>{
+      _SaveIntent: CallbackAction<_SaveIntent>(
+        onInvoke: (_) {
+          if (!_loading && !_saving) _save();
+          return null;
+        },
+      ),
+      _FindIntent: CallbackAction<_FindIntent>(
+        onInvoke: (_) {
+          if (_loading) return null;
+          if (!_showFind) _toggleFind();
+          return null;
+        },
+      ),
+      _ReplaceIntent: CallbackAction<_ReplaceIntent>(
+        onInvoke: (_) {
+          if (_loading) return null;
+          _toggleReplace();
+          return null;
+        },
+      ),
+      _EscIntent: CallbackAction<_EscIntent>(
+        onInvoke: (_) {
+          if (_showFind) {
+            setState(() => _showFind = false);
+            _focus.requestFocus();
+          }
+          return null;
+        },
+      ),
+      _TabIntent: CallbackAction<_TabIntent>(
+        onInvoke: (_) {
+          if (_loading) return null;
+          _insertTab();
+          return null;
+        },
+      ),
+      _ShiftTabIntent: CallbackAction<_ShiftTabIntent>(
+        onInvoke: (_) {
+          if (_loading) return null;
+          _indentSelection(outdent: true);
+          return null;
+        },
+      ),
+      _FindNextIntent: CallbackAction<_FindNextIntent>(
+        onInvoke: (_) {
+          if (_loading) return null;
+          if (_showFind) _findNext();
+          return null;
+        },
+      ),
+      _FindPrevIntent: CallbackAction<_FindPrevIntent>(
+        onInvoke: (_) {
+          if (_loading) return null;
+          if (_showFind) _findPrev();
+          return null;
+        },
+      ),
+    };
+  }
+
+  // =========================
+  // Build
+  // =========================
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text('编辑 ${widget.packId}/main.js'),
-        actions: [
-          IconButton(
-            tooltip: '查找/替换',
-            icon: Icon(_showFind ? Icons.close : Icons.search),
-            onPressed: _loading ? null : _toggleFind,
-          ),
-          IconButton(
-            tooltip: '语法检查',
-            icon: const Icon(Icons.rule),
-            onPressed: _loading ? null : _checkSyntax,
-          ),
-          IconButton(
-            tooltip: '保存',
-            icon: const Icon(Icons.save),
-            onPressed: _loading || _saving ? null : _save,
-          ),
-        ],
-      ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : Column(
-              children: [
-                if (_showFind) _buildFindBar(context),
-                _buildToolbar(context),
-                const Divider(height: 1),
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: CodeField(
-                      focusNode: _focus,
-                      controller: _code,
-                      expands: true,
-                      lineNumberStyle: const LineNumberStyle(
-                        textStyle: TextStyle(color: Colors.grey),
-                      ),
-                      textStyle: const TextStyle(
-                        fontFamily: 'monospace',
-                        fontSize: 13,
-                      ),
+    final title = _dirty ? '编辑 ${widget.packId}/main.js *' : '编辑 ${widget.packId}/main.js';
+
+    return PopScope(
+      canPop: !_dirty,
+      onPopInvokedWithResult: (didPop, _) async {
+        if (didPop) return;
+        final ok = await _confirmDiscardIfDirty();
+        if (!mounted) return;
+        if (ok) Navigator.pop(context);
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(title),
+          actions: [
+            IconButton(
+              tooltip: '查找/替换',
+              icon: Icon(_showFind ? Icons.close : Icons.search),
+              onPressed: _loading ? null : _toggleFind,
+            ),
+            IconButton(
+              tooltip: '语法检查',
+              icon: const Icon(Icons.rule),
+              onPressed: _loading ? null : _checkSyntax,
+            ),
+            IconButton(
+              tooltip: '保存 (Ctrl/⌘+S)',
+              icon: const Icon(Icons.save),
+              onPressed: _loading || _saving ? null : _save,
+            ),
+          ],
+        ),
+        body: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : Shortcuts(
+                shortcuts: _shortcuts(),
+                child: Actions(
+                  actions: _actions(),
+                  child: Focus(
+                    autofocus: true,
+                    child: Column(
+                      children: [
+                        if (_showFind) _buildFindBar(context),
+                        _buildToolbar(context),
+                        const Divider(height: 1),
+                        Expanded(
+                          child: Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Scrollbar(
+                              interactive: true,
+                              child: CodeField(
+                                focusNode: _focus,
+                                controller: _code,
+                                expands: true,
+                                lineNumberStyle: const LineNumberStyle(
+                                  textStyle: TextStyle(color: Colors.grey),
+                                ),
+                                textStyle: const TextStyle(
+                                  fontFamily: 'monospace',
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
-              ],
-            ),
+              ),
+      ),
     );
   }
 
@@ -725,10 +870,30 @@ class _PackEditorPageState extends State<PackEditorPage> {
               } finally {
                 _mutating = false;
               }
+              _dirty = true;
               _focus.requestFocus();
+              setState(() {});
             },
             icon: const Icon(Icons.delete_sweep, size: 18),
             label: const Text('清空'),
+          ),
+          const SizedBox(width: 8),
+          TextButton.icon(
+            onPressed: () {
+              _mutating = true;
+              try {
+                _code.text = _loadedSnapshot;
+                _code.selection =
+                    TextSelection.collapsed(offset: _code.text.length);
+              } finally {
+                _mutating = false;
+              }
+              _dirty = false;
+              _focus.requestFocus();
+              setState(() {});
+            },
+            icon: const Icon(Icons.restart_alt, size: 18),
+            label: const Text('还原'),
           ),
         ],
       ),
@@ -750,25 +915,27 @@ class _PackEditorPageState extends State<PackEditorPage> {
                     decoration: const InputDecoration(
                       isDense: true,
                       border: OutlineInputBorder(),
-                      labelText: '查找',
+                      labelText: '查找 (Ctrl/⌘+F)',
                     ),
                     onSubmitted: (_) => _findNext(),
                   ),
                 ),
                 const SizedBox(width: 8),
                 IconButton(
-                  tooltip: '上一个',
+                  tooltip: '上一个 (Shift+F3)',
                   icon: const Icon(Icons.keyboard_arrow_up),
                   onPressed: _findPrev,
                 ),
                 IconButton(
-                  tooltip: '下一个',
+                  tooltip: '下一个 (F3)',
                   icon: const Icon(Icons.keyboard_arrow_down),
                   onPressed: _findNext,
                 ),
                 IconButton(
                   tooltip: '大小写',
-                  icon: Icon(_caseSensitive ? Icons.text_fields : Icons.text_fields_outlined),
+                  icon: Icon(
+                    _caseSensitive ? Icons.text_fields : Icons.text_fields_outlined,
+                  ),
                   onPressed: () => setState(() => _caseSensitive = !_caseSensitive),
                 ),
               ],
@@ -782,7 +949,7 @@ class _PackEditorPageState extends State<PackEditorPage> {
                     decoration: const InputDecoration(
                       isDense: true,
                       border: OutlineInputBorder(),
-                      labelText: '替换为',
+                      labelText: '替换为 (Ctrl/⌘+H)',
                     ),
                     onSubmitted: (_) => _replaceOne(),
                   ),
@@ -818,4 +985,37 @@ class _Diag {
   final int line;
   final int col;
   _Diag(this.message, this.line, this.col);
+}
+
+// ===== intents =====
+class _SaveIntent extends Intent {
+  const _SaveIntent();
+}
+
+class _FindIntent extends Intent {
+  const _FindIntent();
+}
+
+class _ReplaceIntent extends Intent {
+  const _ReplaceIntent();
+}
+
+class _EscIntent extends Intent {
+  const _EscIntent();
+}
+
+class _TabIntent extends Intent {
+  const _TabIntent();
+}
+
+class _ShiftTabIntent extends Intent {
+  const _ShiftTabIntent();
+}
+
+class _FindNextIntent extends Intent {
+  const _FindNextIntent();
+}
+
+class _FindPrevIntent extends Intent {
+  const _FindPrevIntent();
 }
