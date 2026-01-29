@@ -50,21 +50,21 @@ class PackController extends ChangeNotifier {
   // 🔥 Editor API
   // ================================
 
-  /// 读取 main.js
+  /// 读取 entry（默认 main.js）
   Future<String> loadEntryCode(String packId) async {
     final manifest = await packStore.readManifest(packId);
-    final entry = (manifest['entry'] ?? 'main.js').toString();
-    return packStore.readText(packId, entry);
+    final entry = (manifest['entry'] ?? 'main.js').toString().trim();
+    return packStore.readText(packId, entry.isEmpty ? 'main.js' : entry);
   }
 
-  /// 保存 main.js
+  /// 保存 entry（默认 main.js），并自动备份
   Future<void> saveEntryCode(
     String packId,
     String code,
   ) async {
     final manifest = await packStore.readManifest(packId);
-    final entry = (manifest['entry'] ?? 'main.js').toString();
-    await packStore.writeTextWithBackup(packId, entry, code);
+    final entry = (manifest['entry'] ?? 'main.js').toString().trim();
+    await packStore.writeTextWithBackup(packId, entry.isEmpty ? 'main.js' : entry, code);
   }
 
   // ================================
@@ -80,7 +80,7 @@ class PackController extends ChangeNotifier {
     final store = sourceController.sourceStore;
 
     // ---- normalize sources ----
-    final List<Map<String, dynamic>> sources = [];
+    final List<Map<String, dynamic>> sources = <Map<String, dynamic>>[];
     for (final e in sourcesRaw) {
       if (e is Map) {
         sources.add(e.cast<String, dynamic>());
@@ -112,7 +112,7 @@ class PackController extends ChangeNotifier {
     // MODES
     // ============================
 
-    final Map<String, String> modeLabelMap = {};
+    final Map<String, String> modeLabelMap = <String, String>{};
 
     // 1) primary.modes
     final pm = primary['modes'];
@@ -165,7 +165,7 @@ class PackController extends ChangeNotifier {
     // FILTER SCHEMA
     // ============================
 
-    List<dynamic> filtersSchema = const [];
+    List<dynamic> filtersSchema = const <dynamic>[];
 
     final pf = primary['filters'];
     final sf = sources.first['filters'];
@@ -183,7 +183,7 @@ class PackController extends ChangeNotifier {
     // FILTER UI
     // ============================
 
-    Map<String, dynamic> filterUi = const {};
+    Map<String, dynamic> filterUi = const <String, dynamic>{};
 
     final pUi = primary['filterUi'];
     final mUi = manifest['filterUi'];
@@ -203,7 +203,7 @@ class PackController extends ChangeNotifier {
       name: name,
       type: SourceType.extension,
       ref: ref,
-      specRaw: {
+      specRaw: <String, dynamic>{
         'packId': packId,
         'ref': ref,
         'defaultMode': defaultMode,
@@ -228,7 +228,9 @@ class PackController extends ChangeNotifier {
         if (p == packId) {
           await store.remove(r.id);
         }
-      } catch (_) {}
+      } catch (_) {
+        // ignore
+      }
     }
   }
 }
