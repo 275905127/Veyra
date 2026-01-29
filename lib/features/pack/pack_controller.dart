@@ -47,6 +47,27 @@ class PackController extends ChangeNotifier {
   }
 
   // ================================
+  // 🔥 Editor API
+  // ================================
+
+  /// 读取 main.js
+  Future<String> loadEntryCode(String packId) async {
+    final manifest = await packStore.readManifest(packId);
+    final entry = (manifest['entry'] ?? 'main.js').toString();
+    return packStore.readText(packId, entry);
+  }
+
+  /// 保存 main.js
+  Future<void> saveEntryCode(
+    String packId,
+    String code,
+  ) async {
+    final manifest = await packStore.readManifest(packId);
+    final entry = (manifest['entry'] ?? 'main.js').toString();
+    await packStore.writeTextWithBackup(packId, entry, code);
+  }
+
+  // ================================
   // core
   // ================================
 
@@ -159,12 +180,10 @@ class PackController extends ChangeNotifier {
     }
 
     // ============================
-    // ✅ FILTER UI (源级 UI 规则)
-    // - 优先 primary.filterUi
-    // - 其次 manifest.filterUi
+    // FILTER UI
     // ============================
 
-    Map<String, dynamic> filterUi = const <String, dynamic>{};
+    Map<String, dynamic> filterUi = const {};
 
     final pUi = primary['filterUi'];
     final mUi = manifest['filterUi'];
@@ -176,7 +195,7 @@ class PackController extends ChangeNotifier {
     }
 
     // ============================
-    // WRITE SINGLE SOURCE
+    // WRITE SOURCE
     // ============================
 
     await store.upsertSpecRaw(
@@ -184,20 +203,18 @@ class PackController extends ChangeNotifier {
       name: name,
       type: SourceType.extension,
       ref: ref,
-      specRaw: <String, dynamic>{
+      specRaw: {
         'packId': packId,
         'ref': ref,
         'defaultMode': defaultMode,
         'modes': modeLabelMap,
         'filters': filtersSchema,
-
-        // ✅ 关键：筛选面板读取这里控制 enum 双列/高度等
         'filterUi': filterUi,
       },
     );
 
     // ============================
-    // CLEAN OLD SOURCES FROM SAME PACK
+    // CLEAN OLD SOURCES
     // ============================
 
     final refs = await store.listRefs();
@@ -211,9 +228,7 @@ class PackController extends ChangeNotifier {
         if (p == packId) {
           await store.remove(r.id);
         }
-      } catch (_) {
-        // ignore
-      }
+      } catch (_) {}
     }
   }
 }
