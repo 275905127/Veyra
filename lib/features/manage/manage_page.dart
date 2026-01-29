@@ -8,7 +8,7 @@ import '../pack/pack_controller.dart';
 import '../source/source_controller.dart';
 
 // ✅ 新增：编辑器页面
-import '../pack/pack_editor_page.dart';
+import '../../pack/pack_editor_page.dart';
 
 class ManagePage extends StatelessWidget {
   const ManagePage({super.key});
