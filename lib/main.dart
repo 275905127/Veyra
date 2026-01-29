@@ -16,12 +16,16 @@ import 'features/source/source_controller.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // 1. 初始化依赖注入（包括各种 Store 的 init）
+  // 1. 初始化依赖注入
   await configureDependencies();
+
+  // ✅ 强制初始化 PackStore（确保编辑器可读写文件）
+  final packStore = getIt<PackStore>();
+  await packStore.init();
 
   final logger = getIt<LoggerStore>();
 
-  // Global errors -> logger
+  // Flutter errors -> logger
   FlutterError.onError = (FlutterErrorDetails details) {
     FlutterError.presentError(details);
     logger.e(
@@ -31,6 +35,7 @@ Future<void> main() async {
     );
   };
 
+  // Platform errors -> logger
   PlatformDispatcher.instance.onError = (error, stack) {
     logger.e('PlatformError', error.toString(), details: stack.toString());
     return true;
@@ -41,7 +46,7 @@ Future<void> main() async {
       providers: [
         // Services
         Provider<WallpaperService>.value(value: getIt<WallpaperService>()),
-        Provider<PackStore>.value(value: getIt<PackStore>()),
+        Provider<PackStore>.value(value: packStore),
 
         // Stores
         ChangeNotifierProvider<SourceStore>.value(value: getIt<SourceStore>()),
@@ -49,8 +54,12 @@ Future<void> main() async {
         ChangeNotifierProvider<ApiKeyStore>.value(value: getIt<ApiKeyStore>()),
 
         // Controllers
-        ChangeNotifierProvider<SourceController>.value(value: getIt<SourceController>()),
-        ChangeNotifierProvider<PackController>.value(value: getIt<PackController>()),
+        ChangeNotifierProvider<SourceController>.value(
+          value: getIt<SourceController>(),
+        ),
+        ChangeNotifierProvider<PackController>.value(
+          value: getIt<PackController>(),
+        ),
       ],
       child: const _Bootstrap(child: VeyraApp()),
     ),
