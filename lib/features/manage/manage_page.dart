@@ -7,6 +7,9 @@ import '../../gen_l10n/app_localizations.dart';
 import '../pack/pack_controller.dart';
 import '../source/source_controller.dart';
 
+// ✅ 新增：编辑器页面
+import '../pack/pack_editor_page.dart';
+
 class ManagePage extends StatelessWidget {
   const ManagePage({super.key});
 
@@ -15,22 +18,22 @@ class ManagePage extends StatelessWidget {
     final s = S.of(context);
     final sc = context.watch<SourceController>();
     final sources = sc.sources;
-    final activeId = context.select<SourceStore, String?>((st) => st.active?.id);
+    final activeId =
+        context.select<SourceStore, String?>((st) => st.active?.id);
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
       children: <Widget>[
-        // ✅ 界面简化：只有一个列表，不需要 "Sources" 这种分段标题了
-        // 或者保留一个简单的总标题
         Row(
           children: [
-             Text(s.manageSectionSources, style: Theme.of(context).textTheme.titleMedium),
-             const Spacer(),
-             // 把导入按钮放在这里，或者AppBar (这里演示AppBar的逻辑，下面会把AppBar Actions更新)
+            Text(
+              s.manageSectionSources,
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const Spacer(),
           ],
         ),
         const SizedBox(height: 12),
-        
         sources.isEmpty
             ? _HintCard(
                 title: s.emptyNoSourcesTitle,
@@ -46,7 +49,7 @@ class ManagePage extends StatelessWidget {
   }
 }
 
-/// ✅ 更新 Actions：只保留“导入”和“刷新”
+/// 顶部 Actions
 class ManagePageActions extends StatelessWidget {
   const ManagePageActions({super.key});
 
@@ -56,7 +59,6 @@ class ManagePageActions extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
-        // 导入按钮：本质还是调用 PackController 安装，但用户感知上是“添加图源”
         IconButton(
           tooltip: s.actionImport,
           onPressed: () async {
@@ -106,9 +108,11 @@ class _HintCard extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  Text(title, style: Theme.of(context).textTheme.titleSmall),
+                  Text(title,
+                      style: Theme.of(context).textTheme.titleSmall),
                   const SizedBox(height: 6),
-                  Text(body, style: Theme.of(context).textTheme.bodyMedium),
+                  Text(body,
+                      style: Theme.of(context).textTheme.bodyMedium),
                 ],
               ),
             ),
@@ -166,55 +170,80 @@ class _SourceTile extends StatelessWidget {
       selected: selected,
       selectedColor: cs.primary,
       selectedTileColor: cs.primary.withOpacity(0.08),
-      leading: Icon(Icons.extension), // 统一用拼图图标
+      leading: const Icon(Icons.extension),
       title: Text(source.name),
       subtitle: Text(source.ref),
-      // ✅ 关键：点击进入图源
+
+      /// 点击切换当前源
       onTap: () async {
         await context.read<SourceStore>().setActive(source);
       },
-      // ✅ 关键：删除按钮现在执行“级联删除”
-      trailing: IconButton(
-        icon: const Icon(Icons.delete_outline),
-        tooltip: s.managePackUninstall,
-        onPressed: () async {
-          final confirm = await showDialog<bool>(
-            context: context,
-            builder: (ctx) => AlertDialog(
-              title: const Text('删除图源'),
-              content: Text('确定要删除 "${source.name}" 吗？\n这将同时卸载对应的引擎包文件。'),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(ctx, false),
-                  child: const Text('取消'),
-                ),
-                TextButton(
-                  onPressed: () => Navigator.pop(ctx, true),
-                  child: const Text('删除', style: TextStyle(color: Colors.red)),
-                ),
-              ],
-            ),
-          );
 
-          if (confirm == true && context.mounted) {
-            try {
-              // 调用新的级联删除方法
-              await context.read<SourceController>().deleteSource(source.id);
-              
-              if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text(s.snackUninstalled)),
-                );
+      // ✅ 右侧两个按钮：编辑 + 删除
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          /// ✏️ 编辑按钮
+          IconButton(
+            tooltip: '编辑引擎包',
+            icon: const Icon(Icons.edit),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => PackEditorPage(packId: source.ref),
+                ),
+              );
+            },
+          ),
+
+          /// 🗑 删除按钮
+          IconButton(
+            icon: const Icon(Icons.delete_outline),
+            tooltip: s.managePackUninstall,
+            onPressed: () async {
+              final confirm = await showDialog<bool>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('删除图源'),
+                  content:
+                      Text('确定要删除 "${source.name}" 吗？\n这将同时卸载对应的引擎包文件。'),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('取消'),
+                    ),
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child:
+                          const Text('删除', style: TextStyle(color: Colors.red)),
+                    ),
+                  ],
+                ),
+              );
+
+              if (confirm == true && context.mounted) {
+                try {
+                  await context
+                      .read<SourceController>()
+                      .deleteSource(source.id);
+
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text(s.snackUninstalled)),
+                    );
+                  }
+                } catch (e) {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('删除失败: $e')),
+                    );
+                  }
+                }
               }
-            } catch (e) {
-              if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('删除失败: $e')),
-                );
-              }
-            }
-          }
-        },
+            },
+          ),
+        ],
       ),
     );
   }
