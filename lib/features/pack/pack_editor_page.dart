@@ -810,20 +810,18 @@ class _PackEditorPageState extends State<PackEditorPage> {
                         Expanded(
                           child: Padding(
                             padding: const EdgeInsets.all(12),
-                            child: Scrollbar(
-                              interactive: true,
-                              child: CodeField(
-                                focusNode: _focus,
-                                controller: _code,
-                                expands: true,
-                                lineNumberStyle: const LineNumberStyle(
-                                  textStyle: TextStyle(color: Colors.grey),
-                                ),
-                                textStyle: const TextStyle(
-                                  fontFamily: 'monospace',
-                                  fontSize: 13,
-                                ),
-                              ),
+                            CodeField(
+  controller: _code,
+  focusNode: _focus,
+  expands: true,
+  gutterStyle: const GutterStyle(
+    textStyle: TextStyle(color: Colors.grey),
+  ),
+  textStyle: const TextStyle(
+    fontFamily: 'monospace',
+    fontSize: 13,
+  ),
+),
                             ),
                           ),
                         ),
