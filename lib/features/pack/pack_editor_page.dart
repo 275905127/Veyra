@@ -80,8 +80,9 @@ class _PackEditorPageState extends State<PackEditorPage> {
           .showSnackBar(SnackBar(content: Text('加载失败: $e')));
     } finally {
       _mutating = false;
-      if (!mounted) return;
-      setState(() => _loading = false);
+      if (mounted) {
+        setState(() => _loading = false);
+      }
     }
   }
 
@@ -103,8 +104,9 @@ class _PackEditorPageState extends State<PackEditorPage> {
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text('保存失败: $e')));
     } finally {
-      if (!mounted) return;
-      setState(() => _saving = false);
+      if (mounted) {
+        setState(() => _saving = false);
+      }
     }
   }
 
@@ -678,18 +680,24 @@ class _PackEditorPageState extends State<PackEditorPage> {
 
   Map<ShortcutActivator, Intent> _shortcuts() {
     final isApple = Platform.isMacOS || Platform.isIOS;
-    final primary = isApple ? LogicalKeyboardKey.meta : LogicalKeyboardKey.control;
+    
+    // 辅助函数：根据平台自动选择 Ctrl 或 Meta (Command)
+    SingleActivator ctrlOrCmd(LogicalKeyboardKey key) {
+      return SingleActivator(key, control: !isApple, meta: isApple);
+    }
 
     return <ShortcutActivator, Intent>{
-      SingleActivator(primary, key: LogicalKeyboardKey.keyS): const _SaveIntent(),
-      SingleActivator(primary, key: LogicalKeyboardKey.keyF): const _FindIntent(),
-      SingleActivator(primary, key: LogicalKeyboardKey.keyH): const _ReplaceIntent(),
+      // 使用辅助函数定义跨平台快捷键
+      ctrlOrCmd(LogicalKeyboardKey.keyS): const _SaveIntent(),
+      ctrlOrCmd(LogicalKeyboardKey.keyF): const _FindIntent(),
+      ctrlOrCmd(LogicalKeyboardKey.keyH): const _ReplaceIntent(),
+      
       const SingleActivator(LogicalKeyboardKey.escape): const _EscIntent(),
 
       const SingleActivator(LogicalKeyboardKey.tab): const _TabIntent(),
       const SingleActivator(LogicalKeyboardKey.tab, shift: true): const _ShiftTabIntent(),
 
-      // optional: F3 / Shift+F3 next/prev
+      // F3 不需要 Ctrl/Cmd
       const SingleActivator(LogicalKeyboardKey.f3): const _FindNextIntent(),
       const SingleActivator(LogicalKeyboardKey.f3, shift: true): const _FindPrevIntent(),
     };
@@ -770,7 +778,7 @@ class _PackEditorPageState extends State<PackEditorPage> {
       onPopInvokedWithResult: (didPop, _) async {
         if (didPop) return;
         final ok = await _confirmDiscardIfDirty();
-        if (!mounted) return;
+        if (!mounted) return; // 🔒 安全检查
         if (ok) Navigator.pop(context);
       },
       child: Scaffold(
@@ -810,18 +818,17 @@ class _PackEditorPageState extends State<PackEditorPage> {
                         Expanded(
                           child: Padding(
                             padding: const EdgeInsets.all(12),
-                            CodeField(
-  controller: _code,
-  focusNode: _focus,
-  expands: true,
-  gutterStyle: const GutterStyle(
-    textStyle: TextStyle(color: Colors.grey),
-  ),
-  textStyle: const TextStyle(
-    fontFamily: 'monospace',
-    fontSize: 13,
-  ),
-),
+                            child: CodeField(
+                              controller: _code,
+                              focusNode: _focus,
+                              expands: true,
+                              gutterStyle: const GutterStyle(
+                                textStyle: TextStyle(color: Colors.grey),
+                              ),
+                              textStyle: const TextStyle(
+                                fontFamily: 'monospace',
+                                fontSize: 13,
+                              ),
                             ),
                           ),
                         ),
