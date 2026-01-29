@@ -223,7 +223,6 @@ class _ViewerPageState extends State<ViewerPage> {
       _logErr('Exhausted', details: 'no_more_candidates');
       return;
     }
-    final from = _candidates[_idx];
     final to = _candidates[_idx + 1];
 
     _logWarn(
