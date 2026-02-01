@@ -41,7 +41,7 @@ class _PackEditorPageState extends State<PackEditorPage> {
   bool _dirty = false;
   String _loadedSnapshot = '';
 
-  // 缩放状态
+  // 缩放状态 (默认 14.0)
   double _fontSize = 14.0;
   double _baseScaleFontSize = 14.0;
 
@@ -426,7 +426,7 @@ class _PackEditorPageState extends State<PackEditorPage> {
     final sel = _code.selection;
     final start = sel.start;
     final end = sel.end;
-    // ✅ 修复 429: 使用 final
+    // ✅ 修复: prefer_final_locals
     final int lineStart = text.lastIndexOf('\n', (start - 1).clamp(0, text.length)) + 1;
     int lineEnd = end;
     if (lineEnd < text.length) {
@@ -610,7 +610,7 @@ class _PackEditorPageState extends State<PackEditorPage> {
           col++;
           continue;
         }
-        // ✅ 修复 610-612: 强制加花括号
+        // ✅ 修复: 添加花括号
         if (inS && ch == "'") {
           inS = false;
         } else if (inD && ch == '"') {
@@ -700,13 +700,14 @@ class _PackEditorPageState extends State<PackEditorPage> {
     final title = _dirty ? '$_currentFileName *' : _currentFileName;
     final cs = Theme.of(context).colorScheme;
 
+    // ✅ MT管理器风格动态行号
     int lineCount = 1;
     if (_code.text.isNotEmpty) {
       lineCount = _code.text.split('\n').length;
     }
     final int digits = lineCount.toString().length;
+    // 动态计算宽度：位数 * 字符宽 + 少量padding
     final double charWidth = _fontSize * 0.62;
-    // MT 风格紧凑 Gutter
     final double gutterWidth = (digits * charWidth) + 12.0;
 
     return PopScope(
@@ -799,6 +800,7 @@ class _PackEditorPageState extends State<PackEditorPage> {
                   const Divider(height: 1),
 
                   Expanded(
+                    // ✅ 缩放手势监听
                     child: GestureDetector(
                       onScaleStart: (details) {
                         _baseScaleFontSize = _fontSize;
@@ -815,19 +817,20 @@ class _PackEditorPageState extends State<PackEditorPage> {
                           focusNode: _focus,
                           expands: true,
                           wrap: false,
+                          // ✅ 紧凑动态 Gutter
                           gutterStyle: GutterStyle(
                             width: gutterWidth,
-                            margin: 0,
+                            margin: 0, // 紧凑
                             textAlign: TextAlign.end,
                             textStyle: TextStyle(
                               color: cs.onSurfaceVariant.withValues(alpha: 0.4),
                               height: 1.35,
-                              fontSize: _fontSize,
+                              fontSize: _fontSize, // 跟随缩放
                             ),
                           ),
                           textStyle: TextStyle(
                             fontFamily: 'monospace',
-                            fontSize: _fontSize,
+                            fontSize: _fontSize, // 跟随缩放
                             height: 1.35,
                           ),
                         ),
@@ -842,6 +845,7 @@ class _PackEditorPageState extends State<PackEditorPage> {
     );
   }
 
+  // 下面是 _buildAccessoryBar 等组件，保持原有逻辑 ...
   Widget _buildAccessoryBar(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return Container(
