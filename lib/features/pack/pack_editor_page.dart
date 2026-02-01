@@ -4,7 +4,6 @@ import 'package:highlight/languages/javascript.dart';
 import 'package:highlight/languages/json.dart';
 import 'package:flutter_highlight/themes/atom-one-dark.dart';
 import 'package:provider/provider.dart';
-import 'dart:math' as math; // 用于计算位数
 
 import 'pack_controller.dart';
 
@@ -32,16 +31,16 @@ class _PackEditorPageState extends State<PackEditorPage> {
   bool _saving = false;
   bool _showFind = false;
   bool _caseSensitive = false;
-  
+
   // 文件管理
-  String _currentFileName = 'main.js'; 
+  String _currentFileName = 'main.js';
   // ignore: prefer_final_fields
   List<String> _fileList = ['manifest.json', 'main.js'];
 
   // 编辑器状态
   bool _dirty = false;
   String _loadedSnapshot = '';
-  
+
   // 缩放状态
   double _fontSize = 14.0;
   double _baseScaleFontSize = 14.0;
@@ -53,9 +52,9 @@ class _PackEditorPageState extends State<PackEditorPage> {
   bool _mutating = false;
 
   static const List<String> _kSymbols = [
-    '(', ')', '{', '}', '[', ']', 
-    '=', ':', ';', '.', ',', 
-    "'", '"', '`', 
+    '(', ')', '{', '}', '[', ']',
+    '=', ':', ';', '.', ',',
+    "'", '"', '`',
     '!', '?', '&', '|',
     '=>', 'const', 'let', 'await', 'return'
   ];
@@ -64,11 +63,11 @@ class _PackEditorPageState extends State<PackEditorPage> {
   void initState() {
     super.initState();
     _code = CodeController(
-      text: '', 
+      text: '',
       language: javascript,
     );
     _code.addListener(_onCodeChanged);
-    
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _fetchFileListAndLoad();
     });
@@ -94,9 +93,8 @@ class _PackEditorPageState extends State<PackEditorPage> {
       // final pc = context.read<PackController>();
       // final files = await pc.listFiles(widget.packId);
       // if (files.isNotEmpty) setState(() => _fileList = files);
-      
-      await _loadFileContent(_currentFileName);
 
+      await _loadFileContent(_currentFileName);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('初始化失败: $e')));
@@ -123,7 +121,7 @@ class _PackEditorPageState extends State<PackEditorPage> {
           ],
         ),
       );
-      
+
       if (confirm == null) return;
       if (confirm) {
         await _save();
@@ -135,7 +133,7 @@ class _PackEditorPageState extends State<PackEditorPage> {
       _currentFileName = fileName;
       _loading = true;
     });
-    
+
     if (fileName.endsWith('.json')) {
       _code.language = json;
     } else {
@@ -151,8 +149,8 @@ class _PackEditorPageState extends State<PackEditorPage> {
     try {
       final pc = context.read<PackController>();
       // 暂时假设 loadEntryCode 只加载 main.js，实际应根据 fileName 加载
-      final code = await pc.loadEntryCode(widget.packId); 
-      
+      final code = await pc.loadEntryCode(widget.packId);
+
       if (!mounted) return;
 
       _mutating = true;
@@ -180,7 +178,7 @@ class _PackEditorPageState extends State<PackEditorPage> {
     try {
       final pc = context.read<PackController>();
       await pc.saveEntryCode(widget.packId, _code.text);
-      
+
       if (!mounted) return;
 
       _loadedSnapshot = _code.text;
@@ -198,7 +196,7 @@ class _PackEditorPageState extends State<PackEditorPage> {
   }
 
   // =========================
-  // Editor Logic 
+  // Editor Logic
   // =========================
 
   void _onCodeChanged() {
@@ -323,14 +321,14 @@ class _PackEditorPageState extends State<PackEditorPage> {
     final sel = _code.selection;
     final from = sel.isCollapsed ? sel.baseOffset : sel.extentOffset;
     final i = t.indexOf(q, from);
-    if (i >= 0) { 
-      _selectRange(i, i + q.length); 
-      return; 
+    if (i >= 0) {
+      _selectRange(i, i + q.length);
+      return;
     }
     final w = t.indexOf(q, 0);
-    if (w >= 0) { 
-      _selectRange(w, w + q.length); 
-      return; 
+    if (w >= 0) {
+      _selectRange(w, w + q.length);
+      return;
     }
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('找不到')));
   }
@@ -345,14 +343,14 @@ class _PackEditorPageState extends State<PackEditorPage> {
     final from = sel.isCollapsed ? sel.baseOffset : sel.baseOffset;
     final sub = t.substring(0, from.clamp(0, t.length));
     final i = sub.lastIndexOf(q);
-    if (i >= 0) { 
-      _selectRange(i, i + q.length); 
-      return; 
+    if (i >= 0) {
+      _selectRange(i, i + q.length);
+      return;
     }
     final w = t.lastIndexOf(q);
-    if (w >= 0) { 
-      _selectRange(w, w + q.length); 
-      return; 
+    if (w >= 0) {
+      _selectRange(w, w + q.length);
+      return;
     }
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('找不到')));
   }
@@ -361,16 +359,16 @@ class _PackEditorPageState extends State<PackEditorPage> {
     final q0 = _findCtrl.text;
     if (q0.isEmpty) return;
     final sel = _code.selection;
-    if (sel.isCollapsed) { 
-      _findNext(); 
-      return; 
+    if (sel.isCollapsed) {
+      _findNext();
+      return;
     }
     final text = _code.text;
     final selected = text.substring(sel.start, sel.end);
     final match = _caseSensitive ? (selected == q0) : (_norm(selected) == _norm(q0));
-    if (!match) { 
-      _findNext(); 
-      return; 
+    if (!match) {
+      _findNext();
+      return;
     }
     final rep = _replaceCtrl.text;
     _mutating = true;
@@ -412,9 +410,9 @@ class _PackEditorPageState extends State<PackEditorPage> {
     final sb = StringBuffer();
     while (true) {
       final k = tl.indexOf(nl, i);
-      if (k < 0) { 
-        sb.write(text.substring(i)); 
-        break; 
+      if (k < 0) {
+        sb.write(text.substring(i));
+        break;
       }
       sb.write(text.substring(i, k));
       sb.write(rep);
@@ -483,10 +481,10 @@ class _PackEditorPageState extends State<PackEditorPage> {
       final sel = _code.selection;
       final start = sel.start < 0 ? 0 : sel.start;
       final end = sel.end < 0 ? 0 : sel.end;
-      
+
       final before = _code.text.substring(0, start);
       final after = _code.text.substring(end);
-      
+
       _code.text = before + text + after;
       _code.selection = TextSelection.collapsed(offset: start + text.length);
     } finally {
@@ -534,11 +532,11 @@ class _PackEditorPageState extends State<PackEditorPage> {
     for (int i = 0; i < text.length; i++) {
       if (line == line1 && col == col1) return i;
       final ch = text[i];
-      if (ch == '\n') { 
-        line++; 
-        col = 1; 
-      } else { 
-        col++; 
+      if (ch == '\n') {
+        line++;
+        col = 1;
+      } else {
+        col++;
       }
     }
     return text.length;
@@ -553,103 +551,103 @@ class _PackEditorPageState extends State<PackEditorPage> {
 
     void push(String ch) => stack.add(_Open(ch, line, col));
     void popExpect(String ch) {
-      if (stack.isEmpty) { 
-        out.add(_Diag('多余的闭合符号: $ch', line, col)); 
-        return; 
+      if (stack.isEmpty) {
+        out.add(_Diag('多余的闭合符号: $ch', line, col));
+        return;
       }
       final top = stack.removeLast();
       final ok = (top.ch == '(' && ch == ')') || (top.ch == '[' && ch == ']') || (top.ch == '{' && ch == '}');
-      if (!ok) { 
-        out.add(_Diag('括号不匹配: ${top.ch} (L${top.line}) vs $ch', line, col)); 
+      if (!ok) {
+        out.add(_Diag('括号不匹配: ${top.ch} (L${top.line}) vs $ch', line, col));
       }
     }
 
     for (int i = 0; i < src.length; i++) {
       final ch = src[i];
       final next = (i + 1 < src.length) ? src[i + 1] : '';
-      if (ch == '\n') { 
-        line++; 
-        col = 1; 
-        inLineC = false; 
-        esc = false; 
-        continue; 
+      if (ch == '\n') {
+        line++;
+        col = 1;
+        inLineC = false;
+        esc = false;
+        continue;
       }
       if (!inS && !inD && !inT) {
-        if (!inBlockC && !inLineC && ch == '/' && next == '/') { 
-          inLineC = true; 
-          col++; 
-          continue; 
+        if (!inBlockC && !inLineC && ch == '/' && next == '/') {
+          inLineC = true;
+          col++;
+          continue;
         }
-        if (!inBlockC && !inLineC && ch == '/' && next == '*') { 
-          inBlockC = true; 
-          col++; 
-          continue; 
+        if (!inBlockC && !inLineC && ch == '/' && next == '*') {
+          inBlockC = true;
+          col++;
+          continue;
         }
       }
-      if (inLineC) { 
-        col++; 
-        continue; 
+      if (inLineC) {
+        col++;
+        continue;
       }
       if (inBlockC) {
-        if (ch == '*' && next == '/') { 
-          inBlockC = false; 
-          col++; 
+        if (ch == '*' && next == '/') {
+          inBlockC = false;
+          col++;
         }
-        col++; 
+        col++;
         continue;
       }
       if (inS || inD || inT) {
-        if (esc) { 
-          esc = false; 
-          col++; 
-          continue; 
+        if (esc) {
+          esc = false;
+          col++;
+          continue;
         }
-        if (ch == '\\') { 
-          esc = true; 
-          col++; 
-          continue; 
+        if (ch == '\\') {
+          esc = true;
+          col++;
+          continue;
         }
         if (inS && ch == "'") inS = false;
         else if (inD && ch == '"') inD = false;
         else if (inT && ch == '`') inT = false;
-        col++; 
+        col++;
         continue;
       } else {
-        if (ch == "'") { 
-          inS = true; 
-          col++; 
-          continue; 
+        if (ch == "'") {
+          inS = true;
+          col++;
+          continue;
         }
-        if (ch == '"') { 
-          inD = true; 
-          col++; 
-          continue; 
+        if (ch == '"') {
+          inD = true;
+          col++;
+          continue;
         }
-        if (ch == '`') { 
-          inT = true; 
-          col++; 
-          continue; 
+        if (ch == '`') {
+          inT = true;
+          col++;
+          continue;
         }
       }
-      if (ch == '(' || ch == '[' || ch == '{') { 
-        push(ch); 
-      } else if (ch == ')' || ch == ']' || ch == '}') { 
-        popExpect(ch); 
+      if (ch == '(' || ch == '[' || ch == '{') {
+        push(ch);
+      } else if (ch == ')' || ch == ']' || ch == '}') {
+        popExpect(ch);
       }
       col++;
     }
     if (inBlockC) out.add(_Diag('块注释未闭合', line, col));
-    while (stack.isNotEmpty) { 
-      final o = stack.removeLast(); 
-      out.add(_Diag('括号未闭合: ${o.ch}', o.line, o.col)); 
+    while (stack.isNotEmpty) {
+      final o = stack.removeLast();
+      out.add(_Diag('括号未闭合: ${o.ch}', o.line, o.col));
     }
     return out;
   }
 
   void _toggleFind() {
     setState(() => _showFind = !_showFind);
-    if (_showFind) { 
-      Future.microtask(() => _focus.requestFocus()); 
+    if (_showFind) {
+      Future.microtask(() => _focus.requestFocus());
     }
   }
 
@@ -692,24 +690,23 @@ class _PackEditorPageState extends State<PackEditorPage> {
     final title = _dirty ? '$_currentFileName *' : _currentFileName;
     final cs = Theme.of(context).colorScheme;
 
-    // ✅ 动态行号宽度计算 (Dynamic Gutter Width)
-    // 算法：计算行数的位数 (e.g. 100行=3位)，乘以字符宽度，加上很少的 padding
+    // 动态行号宽度计算 (优化版)
     int lineCount = 1;
     if (_code.text.isNotEmpty) {
-      // 简单的行数估算，避免过于昂贵的 split 操作
-      lineCount = _code.text.split('\n').length; 
+      lineCount = _code.text.split('\n').length;
     }
-    int digits = lineCount.toString().length;
-    // 等宽字体宽度约为 font size 的 0.6 倍，加上 12px 的内边距 (左右各6)
-    double charWidth = _fontSize * 0.62; 
-    double gutterWidth = (digits * charWidth) + 16.0;
+    final int digits = lineCount.toString().length;
+    final double charWidth = _fontSize * 0.62;
+    // MT 风格：仅预留刚好够用的空间 + 极小的 padding
+    final double gutterWidth = (digits * charWidth) + 12.0;
 
     return PopScope(
       canPop: !_dirty,
       onPopInvokedWithResult: (didPop, _) async {
         if (didPop) return;
         final ok = await _confirmDiscardIfDirty();
-        if (!mounted) return;
+        // 修复：async gap 安全检查
+        if (!context.mounted) return;
         if (ok) Navigator.pop(context);
       },
       child: Scaffold(
@@ -779,7 +776,7 @@ class _PackEditorPageState extends State<PackEditorPage> {
              ),
              IconButton(
                tooltip: '保存',
-               icon: _saving 
+               icon: _saving
                    ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
                    : const Icon(Icons.save),
                onPressed: (_loading || _saving) ? null : _save,
@@ -792,7 +789,7 @@ class _PackEditorPageState extends State<PackEditorPage> {
                 children: [
                   if (_showFind) _buildFindBar(context),
                   const Divider(height: 1),
-                  
+
                   Expanded(
                     child: GestureDetector(
                       onScaleStart: (details) {
@@ -804,22 +801,20 @@ class _PackEditorPageState extends State<PackEditorPage> {
                         });
                       },
                       child: CodeTheme(
-                        data: CodeThemeData(styles: atomOneDarkTheme), 
+                        data: CodeThemeData(styles: atomOneDarkTheme),
                         child: CodeField(
                           controller: _code,
                           focusNode: _focus,
                           expands: true,
                           wrap: false,
-                          // ✅ 紧凑型 Gutter (MT Manager Style)
                           gutterStyle: GutterStyle(
-                            width: gutterWidth, // 使用动态计算的宽度
-                            margin: 0, // 去除外部边距，紧凑
-                            textAlign: TextAlign.end, // 数字右对齐
+                            width: gutterWidth,
+                            margin: 0,
+                            textAlign: TextAlign.end,
                             textStyle: TextStyle(
-                              // 使用更低调的颜色
-                              color: cs.onSurfaceVariant.withValues(alpha: 0.4), 
+                              color: cs.onSurfaceVariant.withValues(alpha: 0.4),
                               height: 1.35,
-                              fontSize: _fontSize, // 行号随代码缩放
+                              fontSize: _fontSize,
                             ),
                           ),
                           textStyle: TextStyle(
@@ -850,13 +845,13 @@ class _PackEditorPageState extends State<PackEditorPage> {
       child: Row(
         children: [
           _AccessoryBtn(
-             label: 'Tab', 
-             icon: Icons.keyboard_tab, 
+             label: 'Tab',
+             icon: Icons.keyboard_tab,
              onTap: _insertTab,
              width: 60,
           ),
           VerticalDivider(width: 1, color: cs.outlineVariant),
-          
+
           Expanded(
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
@@ -876,9 +871,9 @@ class _PackEditorPageState extends State<PackEditorPage> {
                          borderRadius: BorderRadius.circular(6),
                       ),
                       child: Text(
-                        s, 
+                        s,
                         style: TextStyle(
-                          fontFamily: 'monospace', 
+                          fontFamily: 'monospace',
                           fontWeight: FontWeight.bold,
                           color: cs.primary,
                         ),
@@ -891,7 +886,7 @@ class _PackEditorPageState extends State<PackEditorPage> {
           ),
 
           VerticalDivider(width: 1, color: cs.outlineVariant),
-          
+
           IconButton(
             icon: const Icon(Icons.keyboard_hide_outlined),
             onPressed: () => _focus.unfocus(),
@@ -931,7 +926,7 @@ class _PackEditorPageState extends State<PackEditorPage> {
                 IconButton(icon: const Icon(Icons.keyboard_arrow_up), onPressed: _findPrev, padding: EdgeInsets.zero, constraints: const BoxConstraints()),
                 IconButton(icon: const Icon(Icons.keyboard_arrow_down), onPressed: _findNext, padding: EdgeInsets.zero, constraints: const BoxConstraints()),
                 IconButton(
-                  icon: Icon(_caseSensitive ? Icons.text_fields : Icons.text_fields_outlined), 
+                  icon: Icon(_caseSensitive ? Icons.text_fields : Icons.text_fields_outlined),
                   onPressed: () => setState(() => _caseSensitive = !_caseSensitive),
                   padding: EdgeInsets.zero, constraints: const BoxConstraints()
                 ),
@@ -984,7 +979,7 @@ class _AccessoryBtn extends StatelessWidget {
         width: width,
         alignment: Alignment.center,
         padding: const EdgeInsets.symmetric(horizontal: 8),
-        child: icon != null 
+        child: icon != null
           ? Icon(icon, size: 20, color: cs.onSurface)
           : Text(label, style: TextStyle(color: cs.onSurface, fontWeight: FontWeight.w500)),
       ),
