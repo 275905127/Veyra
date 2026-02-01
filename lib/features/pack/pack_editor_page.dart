@@ -1,11 +1,8 @@
-import 'dart:io';
-import 'dart:math';
-
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_code_editor/flutter_code_editor.dart';
 import 'package:highlight/languages/javascript.dart';
-import 'package:flutter_highlight/themes/atom-one-dark.dart'; // 建议引入一个好看的主题
+// 确保 pubspec.yaml 中添加了 flutter_highlight
+import 'package:flutter_highlight/themes/atom-one-dark.dart'; 
 import 'package:provider/provider.dart';
 
 import 'pack_controller.dart';
@@ -43,7 +40,6 @@ class _PackEditorPageState extends State<PackEditorPage> {
   TextSelection _lastSel = const TextSelection.collapsed(offset: 0);
   bool _mutating = false;
 
-  // ✅ 定义常用符号列表
   static const List<String> _kSymbols = [
     '(', ')', '{', '}', '[', ']', 
     '=', ':', ';', '.', ',', 
@@ -58,8 +54,6 @@ class _PackEditorPageState extends State<PackEditorPage> {
     _code = CodeController(
       text: '', 
       language: javascript,
-      // 如果没有引入 flutter_highlight themes，可以去掉这行或手动定义 map
-      // languageId: 'javascript', 
     );
     _code.addListener(_onCodeChanged);
     _load();
@@ -146,10 +140,6 @@ class _PackEditorPageState extends State<PackEditorPage> {
     );
     return ok == true;
   }
-
-  // =========================
-  // Editor Enhancements
-  // =========================
 
   void _onCodeChanged() {
     if (_mutating) return;
@@ -248,10 +238,6 @@ class _PackEditorPageState extends State<PackEditorPage> {
     }
   }
 
-  // =========================
-  // Find / Replace Logic (Keep existing logic)
-  // =========================
-  // (为节省篇幅，保持原有的 _findNext, _findPrev, _replaceOne, _replaceAll, _selectRange 逻辑不变)
   String _norm(String s) => _caseSensitive ? s : s.toLowerCase();
 
   bool _selectRange(int start, int end) {
@@ -277,9 +263,15 @@ class _PackEditorPageState extends State<PackEditorPage> {
     final sel = _code.selection;
     final from = sel.isCollapsed ? sel.baseOffset : sel.extentOffset;
     final i = t.indexOf(q, from);
-    if (i >= 0) { _selectRange(i, i + q.length); return; }
+    if (i >= 0) { 
+      _selectRange(i, i + q.length); 
+      return; 
+    }
     final w = t.indexOf(q, 0);
-    if (w >= 0) { _selectRange(w, w + q.length); return; }
+    if (w >= 0) { 
+      _selectRange(w, w + q.length); 
+      return; 
+    }
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('找不到')));
   }
 
@@ -293,9 +285,15 @@ class _PackEditorPageState extends State<PackEditorPage> {
     final from = sel.isCollapsed ? sel.baseOffset : sel.baseOffset;
     final sub = t.substring(0, from.clamp(0, t.length));
     final i = sub.lastIndexOf(q);
-    if (i >= 0) { _selectRange(i, i + q.length); return; }
+    if (i >= 0) { 
+      _selectRange(i, i + q.length); 
+      return; 
+    }
     final w = t.lastIndexOf(q);
-    if (w >= 0) { _selectRange(w, w + q.length); return; }
+    if (w >= 0) { 
+      _selectRange(w, w + q.length); 
+      return; 
+    }
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('找不到')));
   }
 
@@ -303,11 +301,17 @@ class _PackEditorPageState extends State<PackEditorPage> {
     final q0 = _findCtrl.text;
     if (q0.isEmpty) return;
     final sel = _code.selection;
-    if (sel.isCollapsed) { _findNext(); return; }
+    if (sel.isCollapsed) { 
+      _findNext(); 
+      return; 
+    }
     final text = _code.text;
     final selected = text.substring(sel.start, sel.end);
     final match = _caseSensitive ? (selected == q0) : (_norm(selected) == _norm(q0));
-    if (!match) { _findNext(); return; }
+    if (!match) { 
+      _findNext(); 
+      return; 
+    }
     final rep = _replaceCtrl.text;
     _mutating = true;
     try {
@@ -348,17 +352,16 @@ class _PackEditorPageState extends State<PackEditorPage> {
     final sb = StringBuffer();
     while (true) {
       final k = tl.indexOf(nl, i);
-      if (k < 0) { sb.write(text.substring(i)); break; }
+      if (k < 0) { 
+        sb.write(text.substring(i)); 
+        break; 
+      }
       sb.write(text.substring(i, k));
       sb.write(rep);
       i = k + needle.length;
     }
     return sb.toString();
   }
-
-  // =========================
-  // Indent / Helpers
-  // =========================
 
   void _indentSelection({bool outdent = false}) {
     final text = _code.text;
@@ -418,7 +421,6 @@ class _PackEditorPageState extends State<PackEditorPage> {
     _mutating = true;
     try {
       final sel = _code.selection;
-      // 确保选择范围有效
       final start = sel.start < 0 ? 0 : sel.start;
       final end = sel.end < 0 ? 0 : sel.end;
       
@@ -433,10 +435,6 @@ class _PackEditorPageState extends State<PackEditorPage> {
     _focus.requestFocus();
   }
 
-  // =========================
-  // Syntax Check
-  // =========================
-  // (保持原有的 _checkSyntax, _basicJsDiagnostics 等逻辑不变)
   void _checkSyntax() {
     final diags = _basicJsDiagnostics(_code.text);
     if (diags.isEmpty) {
@@ -446,7 +444,7 @@ class _PackEditorPageState extends State<PackEditorPage> {
     showModalBottomSheet(
       context: context,
       showDragHandle: true,
-      builder: (_) => SafeArea(
+      builder: (ctx) => SafeArea(
         child: ListView.separated(
           padding: const EdgeInsets.all(12),
           itemCount: diags.length,
@@ -459,7 +457,7 @@ class _PackEditorPageState extends State<PackEditorPage> {
               title: Text(d.message),
               subtitle: Text('line ${d.line}, col ${d.col}'),
               onTap: () {
-                Navigator.pop(context);
+                Navigator.pop(ctx);
                 final offset = _offsetFromLineCol(_code.text, d.line, d.col);
                 _selectRange(offset, offset);
               },
@@ -476,7 +474,12 @@ class _PackEditorPageState extends State<PackEditorPage> {
     for (int i = 0; i < text.length; i++) {
       if (line == line1 && col == col1) return i;
       final ch = text[i];
-      if (ch == '\n') { line++; col = 1; } else { col++; }
+      if (ch == '\n') { 
+        line++; 
+        col = 1; 
+      } else { 
+        col++; 
+      }
     }
     return text.length;
   }
@@ -490,53 +493,104 @@ class _PackEditorPageState extends State<PackEditorPage> {
 
     void push(String ch) => stack.add(_Open(ch, line, col));
     void popExpect(String ch) {
-      if (stack.isEmpty) { out.add(_Diag('多余的闭合符号: $ch', line, col)); return; }
+      if (stack.isEmpty) { 
+        out.add(_Diag('多余的闭合符号: $ch', line, col)); 
+        return; 
+      }
       final top = stack.removeLast();
       final ok = (top.ch == '(' && ch == ')') || (top.ch == '[' && ch == ']') || (top.ch == '{' && ch == '}');
-      if (!ok) { out.add(_Diag('括号不匹配: ${top.ch} (L${top.line}) vs $ch', line, col)); }
+      if (!ok) { 
+        out.add(_Diag('括号不匹配: ${top.ch} (L${top.line}) vs $ch', line, col)); 
+      }
     }
 
     for (int i = 0; i < src.length; i++) {
       final ch = src[i];
       final next = (i + 1 < src.length) ? src[i + 1] : '';
-      if (ch == '\n') { line++; col = 1; inLineC = false; esc = false; continue; }
-      if (!inS && !inD && !inT) {
-        if (!inBlockC && !inLineC && ch == '/' && next == '/') { inLineC = true; col++; continue; }
-        if (!inBlockC && !inLineC && ch == '/' && next == '*') { inBlockC = true; col++; continue; }
+      if (ch == '\n') { 
+        line++; 
+        col = 1; 
+        inLineC = false; 
+        esc = false; 
+        continue; 
       }
-      if (inLineC) { col++; continue; }
+      if (!inS && !inD && !inT) {
+        if (!inBlockC && !inLineC && ch == '/' && next == '/') { 
+          inLineC = true; 
+          col++; 
+          continue; 
+        }
+        if (!inBlockC && !inLineC && ch == '/' && next == '*') { 
+          inBlockC = true; 
+          col++; 
+          continue; 
+        }
+      }
+      if (inLineC) { 
+        col++; 
+        continue; 
+      }
       if (inBlockC) {
-        if (ch == '*' && next == '/') { inBlockC = false; col++; }
-        col++; continue;
+        if (ch == '*' && next == '/') { 
+          inBlockC = false; 
+          col++; 
+        }
+        col++; 
+        continue;
       }
       if (inS || inD || inT) {
-        if (esc) { esc = false; col++; continue; }
-        if (ch == '\\') { esc = true; col++; continue; }
+        if (esc) { 
+          esc = false; 
+          col++; 
+          continue; 
+        }
+        if (ch == '\\') { 
+          esc = true; 
+          col++; 
+          continue; 
+        }
         if (inS && ch == "'") inS = false;
         else if (inD && ch == '"') inD = false;
         else if (inT && ch == '`') inT = false;
-        col++; continue;
+        col++; 
+        continue;
       } else {
-        if (ch == "'") { inS = true; col++; continue; }
-        if (ch == '"') { inD = true; col++; continue; }
-        if (ch == '`') { inT = true; col++; continue; }
+        if (ch == "'") { 
+          inS = true; 
+          col++; 
+          continue; 
+        }
+        if (ch == '"') { 
+          inD = true; 
+          col++; 
+          continue; 
+        }
+        if (ch == '`') { 
+          inT = true; 
+          col++; 
+          continue; 
+        }
       }
-      if (ch == '(' || ch == '[' || ch == '{') { push(ch); }
-      else if (ch == ')' || ch == ']' || ch == '}') { popExpect(ch); }
+      if (ch == '(' || ch == '[' || ch == '{') { 
+        push(ch); 
+      } else if (ch == ')' || ch == ']' || ch == '}') { 
+        popExpect(ch); 
+      }
       col++;
     }
     if (inBlockC) out.add(_Diag('块注释未闭合', line, col));
-    while (stack.isNotEmpty) { final o = stack.removeLast(); out.add(_Diag('括号未闭合: ${o.ch}', o.line, o.col)); }
+    while (stack.isNotEmpty) { 
+      final o = stack.removeLast(); 
+      out.add(_Diag('括号未闭合: ${o.ch}', o.line, o.col)); 
+    }
     return out;
   }
 
-  // =========================
-  // UI Widgets
-  // =========================
-
   void _toggleFind() {
     setState(() => _showFind = !_showFind);
-    if (_showFind) { Future.microtask(() => _focus.requestFocus()); }
+    if (_showFind) { 
+      Future.microtask(() => _focus.requestFocus()); 
+    }
   }
 
   void _resetCode() {
@@ -565,18 +619,16 @@ class _PackEditorPageState extends State<PackEditorPage> {
         if (ok) Navigator.pop(context);
       },
       child: Scaffold(
-        // ✅ 移除底色，使用 Theme
         appBar: AppBar(
           title: Text(title, style: const TextStyle(fontSize: 16)),
           actions: [
-             // ✅ 将低频操作收入 PopupMenu
              PopupMenuButton<String>(
                icon: const Icon(Icons.more_vert),
                onSelected: (v) {
-                 if (v == 'find') _toggleFind();
-                 if (v == 'syntax') _checkSyntax();
-                 if (v == 'format') _indentSelection();
-                 if (v == 'reset') _resetCode();
+                 if (v == 'find') { _toggleFind(); }
+                 if (v == 'syntax') { _checkSyntax(); }
+                 if (v == 'format') { _indentSelection(); }
+                 if (v == 'reset') { _resetCode(); }
                },
                itemBuilder: (ctx) => [
                  const PopupMenuItem(value: 'find', child: ListTile(dense: true, leading: Icon(Icons.search), title: Text('查找替换'))),
@@ -585,7 +637,6 @@ class _PackEditorPageState extends State<PackEditorPage> {
                  const PopupMenuItem(value: 'reset', child: ListTile(dense: true, leading: Icon(Icons.restart_alt), title: Text('还原更改'))),
                ],
              ),
-             // ✅ 保存按钮常驻
              IconButton(
                tooltip: '保存',
                icon: _saving 
@@ -599,28 +650,26 @@ class _PackEditorPageState extends State<PackEditorPage> {
             ? const Center(child: CircularProgressIndicator())
             : Column(
                 children: [
-                  // 1. 查找栏
                   if (_showFind) _buildFindBar(context),
                   const Divider(height: 1),
                   
-                  // 2. 编辑器主体
                   Expanded(
                     child: CodeTheme(
-                      // 使用 Atom One Dark 主题 (需要引入 flutter_highlight)
-                      // 如果报错，可以换成 CodeThemeData(styles: const {})
                       data: CodeThemeData(styles: atomOneDarkTheme), 
                       child: CodeField(
                         controller: _code,
                         focusNode: _focus,
                         expands: true,
-                        wrap: false, // 代码通常不自动换行，保持格式
-                        // ✅ 开启行号
-                        lineNumberStyle: LineNumberStyle(
+                        wrap: false,
+                        // ✅ 修复：LineNumberStyle -> GutterStyle
+                        gutterStyle: GutterStyle(
                           width: 42,
                           margin: 8,
-                          textStyle: TextStyle(color: cs.onSurfaceVariant.withOpacity(0.5)),
+                          textStyle: TextStyle(
+                            // ✅ 修复：withOpacity -> withValues (Flutter 3.27+)
+                            color: cs.onSurfaceVariant.withValues(alpha: 0.5),
+                          ),
                         ),
-                        // ✅ 优化字体
                         textStyle: const TextStyle(
                           fontFamily: 'monospace',
                           fontSize: 14,
@@ -630,7 +679,6 @@ class _PackEditorPageState extends State<PackEditorPage> {
                     ),
                   ),
 
-                  // 3. ✅ 底部键盘辅助栏 (Accessory Bar)
                   _buildAccessoryBar(context),
                 ],
               ),
@@ -648,7 +696,6 @@ class _PackEditorPageState extends State<PackEditorPage> {
       ),
       child: Row(
         children: [
-          // Tab 键
           _AccessoryBtn(
              label: 'Tab', 
              icon: Icons.keyboard_tab, 
@@ -657,7 +704,6 @@ class _PackEditorPageState extends State<PackEditorPage> {
           ),
           VerticalDivider(width: 1, color: cs.outlineVariant),
           
-          // 符号滚动列表
           Expanded(
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
@@ -693,7 +739,6 @@ class _PackEditorPageState extends State<PackEditorPage> {
 
           VerticalDivider(width: 1, color: cs.outlineVariant),
           
-          // 收起键盘
           IconButton(
             icon: const Icon(Icons.keyboard_hide_outlined),
             onPressed: () => _focus.unfocus(),
