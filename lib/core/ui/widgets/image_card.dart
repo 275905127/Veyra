@@ -74,7 +74,8 @@ class _VeyraImageCardState extends State<VeyraImageCard>
       placeholder: (context, url) => const ShimmerPlaceholder(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.zero),
       ),
-
+      // ✅ 修复：补充 errorWidget 回调定义
+      errorWidget: (context, url, error) {
         return Container(
           color: Theme.of(context).colorScheme.surfaceContainerHighest,
           child: const Icon(Icons.broken_image_rounded, color: Colors.grey),
