@@ -4,6 +4,7 @@ import 'package:highlight/languages/javascript.dart';
 import 'package:highlight/languages/json.dart';
 import 'package:flutter_highlight/themes/atom-one-dark.dart';
 import 'package:provider/provider.dart';
+import 'dart:math' as math; // 用于计算位数
 
 import 'pack_controller.dart';
 
@@ -47,6 +48,7 @@ class _PackEditorPageState extends State<PackEditorPage> {
 
   // 辅助变量
   String _lastText = '';
+  // ignore: unused_field
   TextSelection _lastSel = const TextSelection.collapsed(offset: 0);
   bool _mutating = false;
 
@@ -690,6 +692,18 @@ class _PackEditorPageState extends State<PackEditorPage> {
     final title = _dirty ? '$_currentFileName *' : _currentFileName;
     final cs = Theme.of(context).colorScheme;
 
+    // ✅ 动态行号宽度计算 (Dynamic Gutter Width)
+    // 算法：计算行数的位数 (e.g. 100行=3位)，乘以字符宽度，加上很少的 padding
+    int lineCount = 1;
+    if (_code.text.isNotEmpty) {
+      // 简单的行数估算，避免过于昂贵的 split 操作
+      lineCount = _code.text.split('\n').length; 
+    }
+    int digits = lineCount.toString().length;
+    // 等宽字体宽度约为 font size 的 0.6 倍，加上 12px 的内边距 (左右各6)
+    double charWidth = _fontSize * 0.62; 
+    double gutterWidth = (digits * charWidth) + 16.0;
+
     return PopScope(
       canPop: !_dirty,
       onPopInvokedWithResult: (didPop, _) async {
@@ -796,13 +810,16 @@ class _PackEditorPageState extends State<PackEditorPage> {
                           focusNode: _focus,
                           expands: true,
                           wrap: false,
+                          // ✅ 紧凑型 Gutter (MT Manager Style)
                           gutterStyle: GutterStyle(
-                            width: 60, 
-                            margin: 8,
-                            textAlign: TextAlign.end,
+                            width: gutterWidth, // 使用动态计算的宽度
+                            margin: 0, // 去除外部边距，紧凑
+                            textAlign: TextAlign.end, // 数字右对齐
                             textStyle: TextStyle(
-                              color: cs.onSurfaceVariant.withValues(alpha: 0.5),
+                              // 使用更低调的颜色
+                              color: cs.onSurfaceVariant.withValues(alpha: 0.4), 
                               height: 1.35,
+                              fontSize: _fontSize, // 行号随代码缩放
                             ),
                           ),
                           textStyle: TextStyle(
