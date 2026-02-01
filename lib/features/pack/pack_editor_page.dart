@@ -426,11 +426,14 @@ class _PackEditorPageState extends State<PackEditorPage> {
     final sel = _code.selection;
     final start = sel.start;
     final end = sel.end;
-    int lineStart = text.lastIndexOf('\n', (start - 1).clamp(0, text.length)) + 1;
+    // ✅ 修复 429: 使用 final
+    final int lineStart = text.lastIndexOf('\n', (start - 1).clamp(0, text.length)) + 1;
     int lineEnd = end;
     if (lineEnd < text.length) {
       final nextNl = text.indexOf('\n', lineEnd);
-      if (nextNl >= 0) lineEnd = nextNl;
+      if (nextNl >= 0) {
+        lineEnd = nextNl;
+      }
     }
     final block = text.substring(lineStart, lineEnd);
     final lines = block.split('\n');
@@ -607,9 +610,14 @@ class _PackEditorPageState extends State<PackEditorPage> {
           col++;
           continue;
         }
-        if (inS && ch == "'") inS = false;
-        else if (inD && ch == '"') inD = false;
-        else if (inT && ch == '`') inT = false;
+        // ✅ 修复 610-612: 强制加花括号
+        if (inS && ch == "'") {
+          inS = false;
+        } else if (inD && ch == '"') {
+          inD = false;
+        } else if (inT && ch == '`') {
+          inT = false;
+        }
         col++;
         continue;
       } else {
@@ -636,7 +644,9 @@ class _PackEditorPageState extends State<PackEditorPage> {
       }
       col++;
     }
-    if (inBlockC) out.add(_Diag('块注释未闭合', line, col));
+    if (inBlockC) {
+      out.add(_Diag('块注释未闭合', line, col));
+    }
     while (stack.isNotEmpty) {
       final o = stack.removeLast();
       out.add(_Diag('括号未闭合: ${o.ch}', o.line, o.col));
@@ -690,14 +700,13 @@ class _PackEditorPageState extends State<PackEditorPage> {
     final title = _dirty ? '$_currentFileName *' : _currentFileName;
     final cs = Theme.of(context).colorScheme;
 
-    // 动态行号宽度计算 (优化版)
     int lineCount = 1;
     if (_code.text.isNotEmpty) {
       lineCount = _code.text.split('\n').length;
     }
     final int digits = lineCount.toString().length;
     final double charWidth = _fontSize * 0.62;
-    // MT 风格：仅预留刚好够用的空间 + 极小的 padding
+    // MT 风格紧凑 Gutter
     final double gutterWidth = (digits * charWidth) + 12.0;
 
     return PopScope(
@@ -705,7 +714,6 @@ class _PackEditorPageState extends State<PackEditorPage> {
       onPopInvokedWithResult: (didPop, _) async {
         if (didPop) return;
         final ok = await _confirmDiscardIfDirty();
-        // 修复：async gap 安全检查
         if (!context.mounted) return;
         if (ok) Navigator.pop(context);
       },
