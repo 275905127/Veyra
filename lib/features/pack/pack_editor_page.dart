@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_code_editor/flutter_code_editor.dart';
@@ -65,7 +66,17 @@ class _PackEditorPageState extends State<PackEditorPage> {
 
   Timer? _dirtyDebounce;
 
+  // Zoom throttling (avoid rebuild every pointer tick)
+  Timer? _zoomDebounce;
+  double? _pendingFontSize;
+
   static const String _kIndent = '  ';
+
+  // dead-zone: ignore micro jitter
+  static const double _kScaleDeadZone = 0.02;
+
+  // wheel zoom sensitivity
+  static const double _kWheelZoomFactor = 0.02;
 
   static const List<String> _kSymbols = [
     '(',
@@ -124,6 +135,8 @@ class _PackEditorPageState extends State<PackEditorPage> {
   @override
   void dispose() {
     _dirtyDebounce?.cancel();
+    _zoomDebounce?.cancel();
+
     _code.removeListener(_onCodeChanged);
     _code.dispose();
 
@@ -176,9 +189,8 @@ class _PackEditorPageState extends State<PackEditorPage> {
     void walk(Directory d, String prefix) {
       final entities = d.listSync(followLinks: false);
       for (final ent in entities) {
-        final name = ent.uri.pathSegments.isEmpty
-            ? ''
-            : ent.uri.pathSegments.last;
+        final name =
+            ent.uri.pathSegments.isEmpty ? '' : ent.uri.pathSegments.last;
         if (name.isEmpty) continue;
 
         // Skip backups + hidden folders
@@ -224,7 +236,8 @@ class _PackEditorPageState extends State<PackEditorPage> {
     return path.substring(i);
   }
 
-  List<String> _normalizeFileList(List<String> files, {required String entryFile}) {
+  List<String> _normalizeFileList(List<String> files,
+      {required String entryFile}) {
     final set = <String>{...files};
 
     // Always keep these
@@ -375,7 +388,8 @@ class _PackEditorPageState extends State<PackEditorPage> {
   }
 
   void _snack(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(msg)));
   }
 
   // =========================
@@ -595,7 +609,8 @@ class _PackEditorPageState extends State<PackEditorPage> {
 
     final text = _code.text;
     final selected = text.substring(sel.start, sel.end);
-    final match = _caseSensitive ? (selected == q0) : (_norm(selected) == _norm(q0));
+    final match =
+        _caseSensitive ? (selected == q0) : (_norm(selected) == _norm(q0));
     if (!match) {
       _findNext();
       return;
@@ -667,7 +682,6 @@ class _PackEditorPageState extends State<PackEditorPage> {
   void _toggleFind() {
     setState(() => _showFind = !_showFind);
     if (_showFind) {
-      // put focus into find box
       Future.microtask(() => _findFocus.requestFocus());
     } else {
       Future.microtask(() => _editorFocus.requestFocus());
@@ -725,9 +739,11 @@ class _PackEditorPageState extends State<PackEditorPage> {
 
     _mutating = true;
     try {
-      _code.text = text.substring(0, lineStart) + replaced + text.substring(lineEnd);
+      _code.text =
+          text.substring(0, lineStart) + replaced + text.substring(lineEnd);
 
-      final newStart = (start + (!outdent ? _kIndent.length : 0)).clamp(0, _code.text.length);
+      final newStart =
+          (start + (!outdent ? _kIndent.length : 0)).clamp(0, _code.text.length);
       final newEnd = (end + delta).clamp(0, _code.text.length);
 
       _code.selection = TextSelection(baseOffset: newStart, extentOffset: newEnd);
@@ -770,6 +786,53 @@ class _PackEditorPageState extends State<PackEditorPage> {
       _mutating = false;
     }
     _setDirty(false);
+  }
+
+  // =========================
+  // Zoom helpers
+  // =========================
+
+  bool _isCtrlOrMetaPressed() {
+    final keys = HardwareKeyboard.instance.logicalKeysPressed;
+    return keys.contains(LogicalKeyboardKey.controlLeft) ||
+        keys.contains(LogicalKeyboardKey.controlRight) ||
+        keys.contains(LogicalKeyboardKey.metaLeft) ||
+        keys.contains(LogicalKeyboardKey.metaRight);
+  }
+
+  void _applyFontSize(double next) {
+    final clamped = next.clamp(10.0, 32.0);
+
+    // If change too tiny, ignore (prevents jitter)
+    if ((clamped - _fontSize).abs() < 0.05) return;
+
+    final sel = _code.selection;
+
+    // throttle setState to ~60fps (or less) but stable
+    _pendingFontSize = clamped;
+    _zoomDebounce ??= Timer(const Duration(milliseconds: 16), () {
+      _zoomDebounce = null;
+      if (!mounted) return;
+      final v = _pendingFontSize;
+      if (v == null) return;
+
+      setState(() => _fontSize = v);
+
+      // restore selection after relayout to avoid caret jump
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _code.selection = sel;
+      });
+    });
+  }
+
+  double _measureTextWidth(String text, TextStyle style) {
+    final tp = TextPainter(
+      text: TextSpan(text: text, style: style),
+      textDirection: TextDirection.ltr,
+      textScaleFactor: MediaQuery.textScaleFactorOf(context),
+    )..layout();
+    return tp.width;
   }
 
   // =========================
@@ -1004,24 +1067,51 @@ class _PackEditorPageState extends State<PackEditorPage> {
     final title = _dirty ? '$_currentFileName *' : _currentFileName;
     final cs = Theme.of(context).colorScheme;
 
-    // Dynamic gutter width (monospace-ish)
-    final int lineCount = _code.text.isEmpty ? 1 : _code.text.split('\n').length;
+    // Shared text style for BOTH gutter + editor (fix line-number split)
+    final editorTextStyle = TextStyle(
+      fontFamily: 'monospace',
+      fontSize: _fontSize,
+      height: 1.35,
+    );
+
+    // Correct + stable line count (avoid split('\n') jitter)
+    final int lineCount = _code.lines.isEmpty ? 1 : _code.lines.length;
     final int digits = lineCount.toString().length;
-    final double charWidth = _fontSize * 0.6;
-    final double gutterWidth = (digits * charWidth) + 8.0;
+
+    // Accurate gutter width using TextPainter (no magic 0.6 factor)
+    final sample = '9' * digits;
+    final double gutterWidth = _measureTextWidth(sample, editorTextStyle) + 12.0;
 
     final shortcuts = <ShortcutActivator, Intent>{
       // Save
-      const SingleActivator(LogicalKeyboardKey.keyS, control: true): const _SaveIntent(),
-      const SingleActivator(LogicalKeyboardKey.keyS, meta: true): const _SaveIntent(),
+      const SingleActivator(LogicalKeyboardKey.keyS, control: true):
+          const _SaveIntent(),
+      const SingleActivator(LogicalKeyboardKey.keyS, meta: true):
+          const _SaveIntent(),
       // Find
-      const SingleActivator(LogicalKeyboardKey.keyF, control: true): const _FindIntent(),
-      const SingleActivator(LogicalKeyboardKey.keyF, meta: true): const _FindIntent(),
+      const SingleActivator(LogicalKeyboardKey.keyF, control: true):
+          const _FindIntent(),
+      const SingleActivator(LogicalKeyboardKey.keyF, meta: true):
+          const _FindIntent(),
       // Indent / Outdent
-      const SingleActivator(LogicalKeyboardKey.bracketRight, control: true): const _IndentIntent(false),
-      const SingleActivator(LogicalKeyboardKey.bracketLeft, control: true): const _IndentIntent(true),
-      const SingleActivator(LogicalKeyboardKey.bracketRight, meta: true): const _IndentIntent(false),
-      const SingleActivator(LogicalKeyboardKey.bracketLeft, meta: true): const _IndentIntent(true),
+      const SingleActivator(LogicalKeyboardKey.bracketRight, control: true):
+          const _IndentIntent(false),
+      const SingleActivator(LogicalKeyboardKey.bracketLeft, control: true):
+          const _IndentIntent(true),
+      const SingleActivator(LogicalKeyboardKey.bracketRight, meta: true):
+          const _IndentIntent(false),
+      const SingleActivator(LogicalKeyboardKey.bracketLeft, meta: true):
+          const _IndentIntent(true),
+
+      // Ctrl/⌘ + '+' / '-' zoom
+      const SingleActivator(LogicalKeyboardKey.equal, control: true):
+          const _ZoomIntent(true),
+      const SingleActivator(LogicalKeyboardKey.minus, control: true):
+          const _ZoomIntent(false),
+      const SingleActivator(LogicalKeyboardKey.equal, meta: true):
+          const _ZoomIntent(true),
+      const SingleActivator(LogicalKeyboardKey.minus, meta: true):
+          const _ZoomIntent(false),
     };
 
     final actions = <Type, Action<Intent>>{
@@ -1040,6 +1130,12 @@ class _PackEditorPageState extends State<PackEditorPage> {
       _IndentIntent: CallbackAction<_IndentIntent>(
         onInvoke: (i) {
           _indentSelection(outdent: i.outdent);
+          return null;
+        },
+      ),
+      _ZoomIntent: CallbackAction<_ZoomIntent>(
+        onInvoke: (i) {
+          _applyFontSize(_fontSize + (i.zoomIn ? 1.0 : -1.0));
           return null;
         },
       ),
@@ -1070,11 +1166,13 @@ class _PackEditorPageState extends State<PackEditorPage> {
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            const Icon(Icons.folder_zip, size: 48, color: Colors.orange),
+                            const Icon(Icons.folder_zip,
+                                size: 48, color: Colors.orange),
                             const SizedBox(height: 8),
                             Text(
                               widget.packId,
-                              style: const TextStyle(fontWeight: FontWeight.bold),
+                              style:
+                                  const TextStyle(fontWeight: FontWeight.bold),
                               textAlign: TextAlign.center,
                             ),
                           ],
@@ -1089,16 +1187,21 @@ class _PackEditorPageState extends State<PackEditorPage> {
                               itemBuilder: (context, index) {
                                 final f = _fileList[index];
                                 final isSelected = f == _currentFileName;
-                                final isJson = f.toLowerCase().endsWith('.json');
+                                final isJson =
+                                    f.toLowerCase().endsWith('.json');
                                 return ListTile(
                                   leading: Icon(
-                                    isJson ? Icons.data_object : Icons.javascript,
+                                    isJson
+                                        ? Icons.data_object
+                                        : Icons.javascript,
                                     color: isSelected ? cs.primary : null,
                                   ),
                                   title: Text(
                                     f,
                                     style: TextStyle(
-                                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                      fontWeight: isSelected
+                                          ? FontWeight.bold
+                                          : FontWeight.normal,
                                       color: isSelected ? cs.primary : null,
                                     ),
                                   ),
@@ -1198,36 +1301,45 @@ class _PackEditorPageState extends State<PackEditorPage> {
                         if (_showFind) _buildFindBar(context),
                         const Divider(height: 1),
                         Expanded(
-                          child: GestureDetector(
-                            onScaleStart: (_) => _baseScaleFontSize = _fontSize,
-                            onScaleUpdate: (details) {
-                              setState(() {
-                                _fontSize = (_baseScaleFontSize * details.scale).clamp(10.0, 32.0);
-                              });
+                          // Listener: support Ctrl/⌘ + mouse wheel zoom without stealing scroll normally
+                          child: Listener(
+                            onPointerSignal: (event) {
+                              if (event is PointerScrollEvent &&
+                                  _isCtrlOrMetaPressed()) {
+                                final dy = event.scrollDelta.dy;
+                                _applyFontSize(_fontSize - dy * _kWheelZoomFactor);
+                              }
                             },
-                            child: CodeTheme(
-                              data: CodeThemeData(styles: atomOneDarkTheme),
-                              child: CodeField(
-                                controller: _code,
-                                focusNode: _editorFocus,
-                                expands: true,
-                                wrap: false,
-                                gutterStyle: GutterStyle(
-                                  width: gutterWidth,
-                                  showFoldingHandles: false,
-                                  background: Colors.transparent,
-                                  margin: 0,
-                                  textAlign: TextAlign.end,
-                                  textStyle: TextStyle(
-                                    color: cs.onSurfaceVariant.withValues(alpha: 0.4),
-                                    height: 1.35,
-                                    fontSize: _fontSize,
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onScaleStart: (_) {
+                                _baseScaleFontSize = _fontSize;
+                              },
+                              onScaleUpdate: (details) {
+                                final diff = (details.scale - 1).abs();
+                                if (diff < _kScaleDeadZone) return;
+
+                                _applyFontSize(_baseScaleFontSize * details.scale);
+                              },
+                              child: CodeTheme(
+                                data: CodeThemeData(styles: atomOneDarkTheme),
+                                child: CodeField(
+                                  controller: _code,
+                                  focusNode: _editorFocus,
+                                  expands: true,
+                                  wrap: false,
+                                  gutterStyle: GutterStyle(
+                                    width: gutterWidth,
+                                    showFoldingHandles: false,
+                                    background: Colors.transparent,
+                                    margin: 0,
+                                    textAlign: TextAlign.end,
+                                    textStyle: editorTextStyle.copyWith(
+                                      color: cs.onSurfaceVariant
+                                          .withValues(alpha: 0.4),
+                                    ),
                                   ),
-                                ),
-                                textStyle: TextStyle(
-                                  fontFamily: 'monospace',
-                                  fontSize: _fontSize,
-                                  height: 1.35,
+                                  textStyle: editorTextStyle,
                                 ),
                               ),
                             ),
@@ -1273,7 +1385,8 @@ class _PackEditorPageState extends State<PackEditorPage> {
                     onTap: () => _insertText(s),
                     borderRadius: BorderRadius.circular(6),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 8),
                       decoration: BoxDecoration(
                         color: cs.surfaceContainerHigh,
                         borderRadius: BorderRadius.circular(8),
@@ -1323,7 +1436,8 @@ class _PackEditorPageState extends State<PackEditorPage> {
                       controller: _findCtrl,
                       decoration: const InputDecoration(
                         isDense: true,
-                        contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                        contentPadding:
+                            EdgeInsets.symmetric(horizontal: 8, vertical: 8),
                         border: OutlineInputBorder(),
                         hintText: '查找...',
                       ),
@@ -1346,8 +1460,11 @@ class _PackEditorPageState extends State<PackEditorPage> {
                   tooltip: '下一个',
                 ),
                 IconButton(
-                  icon: Icon(_caseSensitive ? Icons.text_fields : Icons.text_fields_outlined),
-                  onPressed: () => setState(() => _caseSensitive = !_caseSensitive),
+                  icon: Icon(_caseSensitive
+                      ? Icons.text_fields
+                      : Icons.text_fields_outlined),
+                  onPressed: () =>
+                      setState(() => _caseSensitive = !_caseSensitive),
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(),
                   tooltip: _caseSensitive ? '大小写敏感：开' : '大小写敏感：关',
@@ -1371,7 +1488,8 @@ class _PackEditorPageState extends State<PackEditorPage> {
                       controller: _replaceCtrl,
                       decoration: const InputDecoration(
                         isDense: true,
-                        contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                        contentPadding:
+                            EdgeInsets.symmetric(horizontal: 8, vertical: 8),
                         border: OutlineInputBorder(),
                         hintText: '替换为...',
                       ),
@@ -1441,6 +1559,11 @@ class _FindIntent extends Intent {
 class _IndentIntent extends Intent {
   final bool outdent;
   const _IndentIntent(this.outdent);
+}
+
+class _ZoomIntent extends Intent {
+  final bool zoomIn;
+  const _ZoomIntent(this.zoomIn);
 }
 
 // Diagnostics helpers
