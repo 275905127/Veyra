@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -30,6 +31,10 @@ class _PackEditorPageState extends State<PackEditorPage> {
   final TextEditingController _findCtrl = TextEditingController();
   final TextEditingController _replaceCtrl = TextEditingController();
   final FocusNode _findFocus = FocusNode(debugLabel: 'pack_find_focus');
+
+  // ✅ 让 flutter_code_editor 自己做错误标注（波浪线/边栏错误）
+  // 注：DefaultLocalAnalyzer 会做本地轻量分析（括号/配对等），并驱动 errors UI。
+  final Analyzer _analyzer = DefaultLocalAnalyzer();
 
   // =========================
   // Page state
@@ -115,7 +120,9 @@ class _PackEditorPageState extends State<PackEditorPage> {
     _code = CodeController(
       text: '',
       language: javascript,
+      analyzer: _analyzer, // ✅ 关键：启用分析器（驱动错误波浪线/边栏错误）
     );
+
     _code.addListener(_onCodeChanged);
 
     WidgetsBinding.instance.addPostFrameCallback((_) => _bootstrap());
@@ -124,6 +131,7 @@ class _PackEditorPageState extends State<PackEditorPage> {
   @override
   void dispose() {
     _dirtyDebounce?.cancel();
+
     _code.removeListener(_onCodeChanged);
     _code.dispose();
 
@@ -154,11 +162,10 @@ class _PackEditorPageState extends State<PackEditorPage> {
       final normalized = _normalizeFileList(files, entryFile: _currentFileName);
 
       if (!mounted) return;
-      setState(() {
-        _fileList = normalized;
-      });
+      setState(() => _fileList = normalized);
 
       // 3) load current file
+      _applyLanguageFor(_currentFileName);
       await _loadFileContent(_currentFileName);
     } catch (e) {
       if (!mounted) return;
@@ -176,15 +183,12 @@ class _PackEditorPageState extends State<PackEditorPage> {
     void walk(Directory d, String prefix) {
       final entities = d.listSync(followLinks: false);
       for (final ent in entities) {
-        final name = ent.uri.pathSegments.isEmpty
-            ? ''
-            : ent.uri.pathSegments.last;
+        final name = ent.uri.pathSegments.isEmpty ? '' : ent.uri.pathSegments.last;
         if (name.isEmpty) continue;
 
         // Skip backups + hidden folders
         if (name == '.bak') continue;
         if (name.startsWith('.')) {
-          // allow manifest.json even if hidden not possible; keep safe
           if (ent is File && name == 'manifest.json') {
             out.add(prefix.isEmpty ? name : '$prefix/$name');
           }
@@ -241,7 +245,7 @@ class _PackEditorPageState extends State<PackEditorPage> {
     final pinned = <String>['manifest.json'];
     if (entryFile.isNotEmpty) pinned.add(entryFile);
 
-    // Avoid duplication if entry == manifest (edge case)
+    // Avoid duplication if entry == manifest
     final pinnedUnique = <String>[];
     for (final p in pinned) {
       if (p.isEmpty) continue;
@@ -305,7 +309,6 @@ class _PackEditorPageState extends State<PackEditorPage> {
     });
 
     _applyLanguageFor(fileName);
-
     await _loadFileContent(fileName);
 
     if (!mounted) return;
@@ -315,9 +318,10 @@ class _PackEditorPageState extends State<PackEditorPage> {
   void _applyLanguageFor(String fileName) {
     final lower = fileName.toLowerCase();
     if (lower.endsWith('.json')) {
-      _code.language = json;
+      // ✅ setLanguage 会刷新 analyzer 与语言绑定（更稳）
+      _code.setLanguage(json, _analyzer);
     } else {
-      _code.language = javascript;
+      _code.setLanguage(javascript, _analyzer);
     }
   }
 
@@ -398,9 +402,7 @@ class _PackEditorPageState extends State<PackEditorPage> {
     _dirtyDebounce = Timer(const Duration(milliseconds: 120), () {
       if (!mounted) return;
       final isDirtyNow = (_code.text != _loadedSnapshot);
-      if (_dirty != isDirtyNow) {
-        setState(() => _dirty = isDirtyNow);
-      }
+      if (_dirty != isDirtyNow) setState(() => _dirty = isDirtyNow);
     });
 
     // Auto behaviors only when “one char inserted”
@@ -470,7 +472,6 @@ class _PackEditorPageState extends State<PackEditorPage> {
     final nextChar = (n < newText.length) ? newText[n] : '';
     if (nextChar == pair) return;
 
-    // Heuristic: prevent auto-pair inside identifiers for quotes/backticks
     if ((inserted == '"' || inserted == "'" || inserted == '`') && o - 1 >= 0) {
       final prev = newText[o - 1];
       if (RegExp(r'[A-Za-z0-9_\\]').hasMatch(prev)) return;
@@ -513,9 +514,7 @@ class _PackEditorPageState extends State<PackEditorPage> {
   String _norm(String s) => _caseSensitive ? s : s.toLowerCase();
 
   bool _selectRange(int start, int end) {
-    if (start < 0 || end < 0 || start > end || end > _code.text.length) {
-      return false;
-    }
+    if (start < 0 || end < 0 || start > end || end > _code.text.length) return false;
     _mutating = true;
     try {
       _code.selection = TextSelection(baseOffset: start, extentOffset: end);
@@ -543,7 +542,6 @@ class _PackEditorPageState extends State<PackEditorPage> {
       return;
     }
 
-    // wrap
     final w = t.indexOf(q, 0);
     if (w >= 0) {
       _selectRange(w, w + q.length);
@@ -573,7 +571,6 @@ class _PackEditorPageState extends State<PackEditorPage> {
       return;
     }
 
-    // wrap
     final w = t.lastIndexOf(q);
     if (w >= 0) {
       _selectRange(w, w + q.length);
@@ -623,9 +620,7 @@ class _PackEditorPageState extends State<PackEditorPage> {
     final rep = _replaceCtrl.text;
     final text = _code.text;
 
-    final out = _caseSensitive
-        ? text.replaceAll(q0, rep)
-        : _replaceAllCaseInsensitive(text, q0, rep);
+    final out = _caseSensitive ? text.replaceAll(q0, rep) : _replaceAllCaseInsensitive(text, q0, rep);
 
     if (out == text) {
       _snack('没有可替换项');
@@ -667,7 +662,6 @@ class _PackEditorPageState extends State<PackEditorPage> {
   void _toggleFind() {
     setState(() => _showFind = !_showFind);
     if (_showFind) {
-      // put focus into find box
       Future.microtask(() => _findFocus.requestFocus());
     } else {
       Future.microtask(() => _editorFocus.requestFocus());
@@ -685,8 +679,7 @@ class _PackEditorPageState extends State<PackEditorPage> {
     final start = sel.start;
     final end = sel.end;
 
-    final int lineStart =
-        text.lastIndexOf('\n', (start - 1).clamp(0, text.length)) + 1;
+    final int lineStart = text.lastIndexOf('\n', (start - 1).clamp(0, text.length)) + 1;
 
     int lineEnd = end;
     if (lineEnd < text.length) {
@@ -773,193 +766,6 @@ class _PackEditorPageState extends State<PackEditorPage> {
   }
 
   // =========================
-  // Syntax check (basic)
-  // =========================
-
-  void _checkSyntax() {
-    final diags = _basicJsDiagnostics(_code.text);
-    if (diags.isEmpty) {
-      _snack('语法检查：未发现明显问题');
-      return;
-    }
-
-    showModalBottomSheet(
-      context: context,
-      showDragHandle: true,
-      builder: (ctx) => SafeArea(
-        child: ListView.separated(
-          padding: const EdgeInsets.all(12),
-          itemCount: diags.length,
-          separatorBuilder: (_, __) => const Divider(height: 1),
-          itemBuilder: (_, i) {
-            final d = diags[i];
-            return ListTile(
-              dense: true,
-              leading: const Icon(Icons.error_outline, color: Colors.orange),
-              title: Text(d.message),
-              subtitle: Text('line ${d.line}, col ${d.col}'),
-              onTap: () {
-                Navigator.pop(ctx);
-                final offset = _offsetFromLineCol(_code.text, d.line, d.col);
-                _selectRange(offset, offset);
-              },
-            );
-          },
-        ),
-      ),
-    );
-  }
-
-  int _offsetFromLineCol(String text, int line1, int col1) {
-    int line = 1;
-    int col = 1;
-
-    for (int i = 0; i < text.length; i++) {
-      if (line == line1 && col == col1) return i;
-
-      final ch = text[i];
-      if (ch == '\n') {
-        line++;
-        col = 1;
-      } else {
-        col++;
-      }
-    }
-
-    return text.length;
-  }
-
-  List<_Diag> _basicJsDiagnostics(String src) {
-    final out = <_Diag>[];
-    final stack = <_Open>[];
-
-    bool inS = false;
-    bool inD = false;
-    bool inT = false;
-
-    bool inLineC = false;
-    bool inBlockC = false;
-
-    bool esc = false;
-
-    int line = 1;
-    int col = 1;
-
-    void push(String ch) => stack.add(_Open(ch, line, col));
-
-    void popExpect(String ch) {
-      if (stack.isEmpty) {
-        out.add(_Diag('多余的闭合符号: $ch', line, col));
-        return;
-      }
-      final top = stack.removeLast();
-      final ok = (top.ch == '(' && ch == ')') ||
-          (top.ch == '[' && ch == ']') ||
-          (top.ch == '{' && ch == '}');
-      if (!ok) {
-        out.add(_Diag('括号不匹配: ${top.ch} (L${top.line}) vs $ch', line, col));
-      }
-    }
-
-    for (int i = 0; i < src.length; i++) {
-      final ch = src[i];
-      final next = (i + 1 < src.length) ? src[i + 1] : '';
-
-      if (ch == '\n') {
-        line++;
-        col = 1;
-        inLineC = false;
-        esc = false;
-        continue;
-      }
-
-      // comment enter (only when not in string)
-      if (!inS && !inD && !inT) {
-        if (!inBlockC && !inLineC && ch == '/' && next == '/') {
-          inLineC = true;
-          col++;
-          continue;
-        }
-        if (!inBlockC && !inLineC && ch == '/' && next == '*') {
-          inBlockC = true;
-          col++;
-          continue;
-        }
-      }
-
-      if (inLineC) {
-        col++;
-        continue;
-      }
-
-      if (inBlockC) {
-        if (ch == '*' && next == '/') {
-          inBlockC = false;
-          col++;
-        }
-        col++;
-        continue;
-      }
-
-      // string state
-      if (inS || inD || inT) {
-        if (esc) {
-          esc = false;
-          col++;
-          continue;
-        }
-        if (ch == '\\') {
-          esc = true;
-          col++;
-          continue;
-        }
-        if (inS && ch == "'") {
-          inS = false;
-        } else if (inD && ch == '"') {
-          inD = false;
-        } else if (inT && ch == '`') {
-          inT = false;
-        }
-        col++;
-        continue;
-      } else {
-        if (ch == "'") {
-          inS = true;
-          col++;
-          continue;
-        }
-        if (ch == '"') {
-          inD = true;
-          col++;
-          continue;
-        }
-        if (ch == '`') {
-          inT = true;
-          col++;
-          continue;
-        }
-      }
-
-      if (ch == '(' || ch == '[' || ch == '{') {
-        push(ch);
-      } else if (ch == ')' || ch == ']' || ch == '}') {
-        popExpect(ch);
-      }
-
-      col++;
-    }
-
-    if (inBlockC) out.add(_Diag('块注释未闭合', line, col));
-
-    while (stack.isNotEmpty) {
-      final o = stack.removeLast();
-      out.add(_Diag('括号未闭合: ${o.ch}', o.line, o.col));
-    }
-
-    return out;
-  }
-
-  // =========================
   // Back navigation guard
   // =========================
 
@@ -991,24 +797,60 @@ class _PackEditorPageState extends State<PackEditorPage> {
     if (decision == null || decision == _DirtyDecision.cancel) return false;
     if (decision == _DirtyDecision.discard) return true;
 
-    // save
     return _save();
   }
 
   // =========================
-  // UI
+  // UI helpers
   // =========================
+
+  // ✅ 精确测量行号宽度，避免“10”被折成“1\n0”
+  double _measureLineNumberGutterWidth({
+    required BuildContext context,
+    required TextStyle style,
+    required int lineCount,
+  }) {
+    final digits = math.max(1, lineCount).toString().length;
+    final sample = List.filled(digits, '8').join(); // “8888”最宽，保守估算
+    final tp = TextPainter(
+      text: TextSpan(text: sample, style: style),
+      textDirection: Directionality.of(context),
+      maxLines: 1,
+    )..layout();
+
+    // 左右留白 + 轻微冗余，彻底杜绝折行
+    return tp.width + 18.0;
+  }
+
+  // ✅ 缩放加速曲线：scale 变化“更灵敏”
+  double _applyZoomCurve(double base, double rawScale) {
+    // rawScale 通常在 0.9~1.1 附近抖动；这里做“非线性放大”
+    final d = (rawScale - 1.0);
+    final boosted = 1.0 + d * 2.6; // 灵敏度系数（越大越敏）
+    // 额外再给一点曲线，让小幅度 pinch 也明显
+    final curved = boosted >= 1 ? math.pow(boosted, 1.15).toDouble() : math.pow(boosted, 1.05).toDouble();
+    return (base * curved).clamp(10.0, 32.0);
+  }
 
   @override
   Widget build(BuildContext context) {
     final title = _dirty ? '$_currentFileName *' : _currentFileName;
     final cs = Theme.of(context).colorScheme;
 
-    // Dynamic gutter width (monospace-ish)
     final int lineCount = _code.text.isEmpty ? 1 : _code.text.split('\n').length;
-    final int digits = lineCount.toString().length;
-    final double charWidth = _fontSize * 0.6;
-    final double gutterWidth = (digits * charWidth) + 8.0;
+
+    final gutterTextStyle = TextStyle(
+      fontFamily: 'monospace',
+      color: cs.onSurfaceVariant.withValues(alpha: 0.45),
+      height: 1.35,
+      fontSize: _fontSize,
+    );
+
+    final gutterWidth = _measureLineNumberGutterWidth(
+      context: context,
+      style: gutterTextStyle,
+      lineCount: lineCount,
+    );
 
     final shortcuts = <ShortcutActivator, Intent>{
       // Save
@@ -1114,69 +956,15 @@ class _PackEditorPageState extends State<PackEditorPage> {
               appBar: AppBar(
                 title: Text(title, style: const TextStyle(fontSize: 16)),
                 actions: [
-                  PopupMenuButton<String>(
-                    icon: const Icon(Icons.more_vert),
-                    onSelected: (v) {
-                      switch (v) {
-                        case 'find':
-                          _toggleFind();
-                          break;
-                        case 'syntax':
-                          _checkSyntax();
-                          break;
-                        case 'indent':
-                          _indentSelection();
-                          break;
-                        case 'outdent':
-                          _indentSelection(outdent: true);
-                          break;
-                        case 'reset':
-                          _resetCode();
-                          break;
-                      }
-                    },
-                    itemBuilder: (ctx) => [
-                      const PopupMenuItem(
-                        value: 'find',
-                        child: ListTile(
-                          dense: true,
-                          leading: Icon(Icons.search),
-                          title: Text('查找替换 (Ctrl/⌘+F)'),
-                        ),
-                      ),
-                      const PopupMenuItem(
-                        value: 'syntax',
-                        child: ListTile(
-                          dense: true,
-                          leading: Icon(Icons.rule),
-                          title: Text('语法检查'),
-                        ),
-                      ),
-                      const PopupMenuItem(
-                        value: 'indent',
-                        child: ListTile(
-                          dense: true,
-                          leading: Icon(Icons.format_indent_increase),
-                          title: Text('整体缩进 (Ctrl/⌘+])'),
-                        ),
-                      ),
-                      const PopupMenuItem(
-                        value: 'outdent',
-                        child: ListTile(
-                          dense: true,
-                          leading: Icon(Icons.format_indent_decrease),
-                          title: Text('整体反缩进 (Ctrl/⌘+[)'),
-                        ),
-                      ),
-                      const PopupMenuItem(
-                        value: 'reset',
-                        child: ListTile(
-                          dense: true,
-                          leading: Icon(Icons.restart_alt),
-                          title: Text('还原更改'),
-                        ),
-                      ),
-                    ],
+                  IconButton(
+                    tooltip: '查找替换 (Ctrl/⌘+F)',
+                    icon: const Icon(Icons.search),
+                    onPressed: _toggleFind,
+                  ),
+                  IconButton(
+                    tooltip: '还原更改',
+                    icon: const Icon(Icons.restart_alt),
+                    onPressed: _dirty ? _resetCode : null,
                   ),
                   IconButton(
                     tooltip: '保存 (Ctrl/⌘+S)',
@@ -1199,10 +987,12 @@ class _PackEditorPageState extends State<PackEditorPage> {
                         const Divider(height: 1),
                         Expanded(
                           child: GestureDetector(
+                            behavior: HitTestBehavior.opaque,
                             onScaleStart: (_) => _baseScaleFontSize = _fontSize,
                             onScaleUpdate: (details) {
+                              // ✅ 更灵敏缩放
                               setState(() {
-                                _fontSize = (_baseScaleFontSize * details.scale).clamp(10.0, 32.0);
+                                _fontSize = _applyZoomCurve(_baseScaleFontSize, details.scale);
                               });
                             },
                             child: CodeTheme(
@@ -1212,23 +1002,32 @@ class _PackEditorPageState extends State<PackEditorPage> {
                                 focusNode: _editorFocus,
                                 expands: true,
                                 wrap: false,
+
+                                // ✅ 关键：打开 gutter errors（波浪线/错误提示由 analyzer 驱动）
                                 gutterStyle: GutterStyle(
                                   width: gutterWidth,
                                   showFoldingHandles: false,
+                                  showLineNumbers: true,
+                                  showErrors: true, // ✅ 错误波浪线/错误 UI
                                   background: Colors.transparent,
                                   margin: 0,
                                   textAlign: TextAlign.end,
-                                  textStyle: TextStyle(
-                                    color: cs.onSurfaceVariant.withValues(alpha: 0.4),
-                                    height: 1.35,
-                                    fontSize: _fontSize,
-                                  ),
+                                  textStyle: gutterTextStyle,
                                 ),
+
                                 textStyle: TextStyle(
                                   fontFamily: 'monospace',
                                   fontSize: _fontSize,
                                   height: 1.35,
                                 ),
+
+                                // ✅ 可选：对特定行号做自定义（这里保持默认，但确保不换行）
+                                lineNumberBuilder: (line, style) {
+                                  final s = (style ?? gutterTextStyle).copyWith(
+                                    fontFamily: 'monospace',
+                                  );
+                                  return TextSpan(text: '$line', style: s);
+                                },
                               ),
                             ),
                           ),
@@ -1441,19 +1240,4 @@ class _FindIntent extends Intent {
 class _IndentIntent extends Intent {
   final bool outdent;
   const _IndentIntent(this.outdent);
-}
-
-// Diagnostics helpers
-class _Open {
-  final String ch;
-  final int line;
-  final int col;
-  _Open(this.ch, this.line, this.col);
-}
-
-class _Diag {
-  final String message;
-  final int line;
-  final int col;
-  _Diag(this.message, this.line, this.col);
 }
