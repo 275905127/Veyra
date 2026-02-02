@@ -10,6 +10,7 @@ class VeyraImageCard extends StatefulWidget {
   final double? aspectRatio;
   final BoxFit fit;
   final int? memCacheWidth;
+
   // ✅ 新增：接收请求头
   final Map<String, String>? headers;
 
@@ -30,8 +31,8 @@ class VeyraImageCard extends StatefulWidget {
 
 class _VeyraImageCardState extends State<VeyraImageCard>
     with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<double> _scaleAnimation;
+  late final AnimationController _controller;
+  late final Animation<double> _scaleAnimation;
 
   @override
   void initState() {
@@ -53,20 +54,26 @@ class _VeyraImageCardState extends State<VeyraImageCard>
   }
 
   void _onTapDown(TapDownDetails details) {
-    if (widget.onTap != null) _controller.forward();
+    if (widget.onTap != null) {
+      _controller.forward();
+    }
   }
 
   void _onTapUp(TapUpDetails details) {
-    if (widget.onTap != null) _controller.reverse();
+    if (widget.onTap != null) {
+      _controller.reverse();
+    }
   }
 
   void _onTapCancel() {
-    if (widget.onTap != null) _controller.reverse();
+    if (widget.onTap != null) {
+      _controller.reverse();
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    Widget image = CachedNetworkImage(
+    final image = CachedNetworkImage(
       imageUrl: widget.imageUrl,
       fit: widget.fit,
       memCacheWidth: widget.memCacheWidth,
@@ -74,7 +81,6 @@ class _VeyraImageCardState extends State<VeyraImageCard>
       placeholder: (context, url) => const ShimmerPlaceholder(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.zero),
       ),
-      // ✅ 修复：补充 errorWidget 回调定义
       errorWidget: (context, url, error) {
         return Container(
           color: Theme.of(context).colorScheme.surfaceContainerHighest,
@@ -83,16 +89,15 @@ class _VeyraImageCardState extends State<VeyraImageCard>
       },
     );
 
-    Widget content = ClipRRect(
+    final clipped = ClipRRect(
       borderRadius: BorderRadius.circular(6),
       child: widget.aspectRatio != null
           ? AspectRatio(aspectRatio: widget.aspectRatio!, child: image)
           : image,
     );
 
-    content = Hero(
+    final hero = Hero(
       tag: widget.heroTag,
-      child: content,
       flightShuttleBuilder: (
         flightContext,
         animation,
@@ -105,6 +110,7 @@ class _VeyraImageCardState extends State<VeyraImageCard>
           child: fromHeroContext.widget,
         );
       },
+      child: clipped,
     );
 
     return AnimatedBuilder(
@@ -118,7 +124,7 @@ class _VeyraImageCardState extends State<VeyraImageCard>
         onTapUp: _onTapUp,
         onTapCancel: _onTapCancel,
         onTap: widget.onTap,
-        child: content,
+        child: hero,
       ),
     );
   }
