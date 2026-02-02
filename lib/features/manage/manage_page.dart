@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -64,7 +66,9 @@ class ManagePageActions extends StatelessWidget {
           onPressed: () async {
             try {
               await context.read<PackController>().install();
-            } catch (_) {}
+            } catch (_) {
+              // ignore
+            }
           },
           icon: const Icon(Icons.add),
         ),
@@ -173,7 +177,7 @@ class _SourceTile extends StatelessWidget {
     return ListTile(
       selected: selected,
       selectedColor: cs.primary,
-      selectedTileColor: cs.primary.withOpacity(0.08),
+      selectedTileColor: cs.primary.withValues(alpha: 0.08),
       leading: const Icon(Icons.extension),
       title: Text(source.name),
       subtitle: Text(source.ref),
@@ -202,10 +206,13 @@ class _SourceTile extends StatelessWidget {
 
                 if (!context.mounted) return;
 
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => PackEditorPage(packId: packId),
+                // Navigator.push 返回 Future；这里不等待结果，使用 unawaited 消除 analyzer 提示
+                unawaited(
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => PackEditorPage(packId: packId),
+                    ),
                   ),
                 );
               } catch (e) {
