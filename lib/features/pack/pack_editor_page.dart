@@ -388,8 +388,7 @@ class _PackEditorPageState extends State<PackEditorPage> {
   }
 
   void _snack(String msg) {
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(msg)));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
   // =========================
@@ -806,19 +805,22 @@ class _PackEditorPageState extends State<PackEditorPage> {
     // If change too tiny, ignore (prevents jitter)
     if ((clamped - _fontSize).abs() < 0.05) return;
 
+    // Save selection to reduce caret jump after relayout
     final sel = _code.selection;
 
-    // throttle setState to ~60fps (or less) but stable
     _pendingFontSize = clamped;
-    _zoomDebounce ??= Timer(const Duration(milliseconds: 16), () {
+
+    // throttle setState to ~60fps but stable
+    if (_zoomDebounce != null) return;
+    _zoomDebounce = Timer(const Duration(milliseconds: 16), () {
       _zoomDebounce = null;
       if (!mounted) return;
+
       final v = _pendingFontSize;
       if (v == null) return;
 
       setState(() => _fontSize = v);
 
-      // restore selection after relayout to avoid caret jump
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         _code.selection = sel;
@@ -826,11 +828,22 @@ class _PackEditorPageState extends State<PackEditorPage> {
     });
   }
 
+  int _countLines(String text) {
+    // Show line count = number of '\n' + 1
+    // If ends with '\n', the last empty line is still a visible line in editor.
+    if (text.isEmpty) return 1;
+    int lines = 1;
+    for (int i = 0; i < text.length; i++) {
+      if (text.codeUnitAt(i) == 0x0A) lines++;
+    }
+    return lines;
+  }
+
   double _measureTextWidth(String text, TextStyle style) {
     final tp = TextPainter(
       text: TextSpan(text: text, style: style),
       textDirection: TextDirection.ltr,
-      textScaleFactor: MediaQuery.textScaleFactorOf(context),
+      textScaler: MediaQuery.textScalerOf(context), // ✅ replace deprecated
     )..layout();
     return tp.width;
   }
@@ -1074,8 +1087,8 @@ class _PackEditorPageState extends State<PackEditorPage> {
       height: 1.35,
     );
 
-    // Correct + stable line count (avoid split('\n') jitter)
-    final int lineCount = _code.lines.isEmpty ? 1 : _code.lines.length;
+    // Stable line count (no split allocations; also works with your CodeController version)
+    final int lineCount = _countLines(_code.text);
     final int digits = lineCount.toString().length;
 
     // Accurate gutter width using TextPainter (no magic 0.6 factor)
@@ -1084,34 +1097,22 @@ class _PackEditorPageState extends State<PackEditorPage> {
 
     final shortcuts = <ShortcutActivator, Intent>{
       // Save
-      const SingleActivator(LogicalKeyboardKey.keyS, control: true):
-          const _SaveIntent(),
-      const SingleActivator(LogicalKeyboardKey.keyS, meta: true):
-          const _SaveIntent(),
+      const SingleActivator(LogicalKeyboardKey.keyS, control: true): const _SaveIntent(),
+      const SingleActivator(LogicalKeyboardKey.keyS, meta: true): const _SaveIntent(),
       // Find
-      const SingleActivator(LogicalKeyboardKey.keyF, control: true):
-          const _FindIntent(),
-      const SingleActivator(LogicalKeyboardKey.keyF, meta: true):
-          const _FindIntent(),
+      const SingleActivator(LogicalKeyboardKey.keyF, control: true): const _FindIntent(),
+      const SingleActivator(LogicalKeyboardKey.keyF, meta: true): const _FindIntent(),
       // Indent / Outdent
-      const SingleActivator(LogicalKeyboardKey.bracketRight, control: true):
-          const _IndentIntent(false),
-      const SingleActivator(LogicalKeyboardKey.bracketLeft, control: true):
-          const _IndentIntent(true),
-      const SingleActivator(LogicalKeyboardKey.bracketRight, meta: true):
-          const _IndentIntent(false),
-      const SingleActivator(LogicalKeyboardKey.bracketLeft, meta: true):
-          const _IndentIntent(true),
+      const SingleActivator(LogicalKeyboardKey.bracketRight, control: true): const _IndentIntent(false),
+      const SingleActivator(LogicalKeyboardKey.bracketLeft, control: true): const _IndentIntent(true),
+      const SingleActivator(LogicalKeyboardKey.bracketRight, meta: true): const _IndentIntent(false),
+      const SingleActivator(LogicalKeyboardKey.bracketLeft, meta: true): const _IndentIntent(true),
 
       // Ctrl/⌘ + '+' / '-' zoom
-      const SingleActivator(LogicalKeyboardKey.equal, control: true):
-          const _ZoomIntent(true),
-      const SingleActivator(LogicalKeyboardKey.minus, control: true):
-          const _ZoomIntent(false),
-      const SingleActivator(LogicalKeyboardKey.equal, meta: true):
-          const _ZoomIntent(true),
-      const SingleActivator(LogicalKeyboardKey.minus, meta: true):
-          const _ZoomIntent(false),
+      const SingleActivator(LogicalKeyboardKey.equal, control: true): const _ZoomIntent(true),
+      const SingleActivator(LogicalKeyboardKey.minus, control: true): const _ZoomIntent(false),
+      const SingleActivator(LogicalKeyboardKey.equal, meta: true): const _ZoomIntent(true),
+      const SingleActivator(LogicalKeyboardKey.minus, meta: true): const _ZoomIntent(false),
     };
 
     final actions = <Type, Action<Intent>>{
@@ -1166,13 +1167,11 @@ class _PackEditorPageState extends State<PackEditorPage> {
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            const Icon(Icons.folder_zip,
-                                size: 48, color: Colors.orange),
+                            const Icon(Icons.folder_zip, size: 48, color: Colors.orange),
                             const SizedBox(height: 8),
                             Text(
                               widget.packId,
-                              style:
-                                  const TextStyle(fontWeight: FontWeight.bold),
+                              style: const TextStyle(fontWeight: FontWeight.bold),
                               textAlign: TextAlign.center,
                             ),
                           ],
@@ -1187,21 +1186,16 @@ class _PackEditorPageState extends State<PackEditorPage> {
                               itemBuilder: (context, index) {
                                 final f = _fileList[index];
                                 final isSelected = f == _currentFileName;
-                                final isJson =
-                                    f.toLowerCase().endsWith('.json');
+                                final isJson = f.toLowerCase().endsWith('.json');
                                 return ListTile(
                                   leading: Icon(
-                                    isJson
-                                        ? Icons.data_object
-                                        : Icons.javascript,
+                                    isJson ? Icons.data_object : Icons.javascript,
                                     color: isSelected ? cs.primary : null,
                                   ),
                                   title: Text(
                                     f,
                                     style: TextStyle(
-                                      fontWeight: isSelected
-                                          ? FontWeight.bold
-                                          : FontWeight.normal,
+                                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
                                       color: isSelected ? cs.primary : null,
                                     ),
                                   ),
@@ -1238,8 +1232,8 @@ class _PackEditorPageState extends State<PackEditorPage> {
                           break;
                       }
                     },
-                    itemBuilder: (ctx) => [
-                      const PopupMenuItem(
+                    itemBuilder: (ctx) => const [
+                      PopupMenuItem(
                         value: 'find',
                         child: ListTile(
                           dense: true,
@@ -1247,7 +1241,7 @@ class _PackEditorPageState extends State<PackEditorPage> {
                           title: Text('查找替换 (Ctrl/⌘+F)'),
                         ),
                       ),
-                      const PopupMenuItem(
+                      PopupMenuItem(
                         value: 'syntax',
                         child: ListTile(
                           dense: true,
@@ -1255,7 +1249,7 @@ class _PackEditorPageState extends State<PackEditorPage> {
                           title: Text('语法检查'),
                         ),
                       ),
-                      const PopupMenuItem(
+                      PopupMenuItem(
                         value: 'indent',
                         child: ListTile(
                           dense: true,
@@ -1263,7 +1257,7 @@ class _PackEditorPageState extends State<PackEditorPage> {
                           title: Text('整体缩进 (Ctrl/⌘+])'),
                         ),
                       ),
-                      const PopupMenuItem(
+                      PopupMenuItem(
                         value: 'outdent',
                         child: ListTile(
                           dense: true,
@@ -1271,7 +1265,7 @@ class _PackEditorPageState extends State<PackEditorPage> {
                           title: Text('整体反缩进 (Ctrl/⌘+[)'),
                         ),
                       ),
-                      const PopupMenuItem(
+                      PopupMenuItem(
                         value: 'reset',
                         child: ListTile(
                           dense: true,
@@ -1301,24 +1295,18 @@ class _PackEditorPageState extends State<PackEditorPage> {
                         if (_showFind) _buildFindBar(context),
                         const Divider(height: 1),
                         Expanded(
-                          // Listener: support Ctrl/⌘ + mouse wheel zoom without stealing scroll normally
                           child: Listener(
                             onPointerSignal: (event) {
-                              if (event is PointerScrollEvent &&
-                                  _isCtrlOrMetaPressed()) {
+                              if (event is PointerScrollEvent && _isCtrlOrMetaPressed()) {
                                 final dy = event.scrollDelta.dy;
                                 _applyFontSize(_fontSize - dy * _kWheelZoomFactor);
                               }
                             },
                             child: GestureDetector(
                               behavior: HitTestBehavior.opaque,
-                              onScaleStart: (_) {
-                                _baseScaleFontSize = _fontSize;
-                              },
+                              onScaleStart: (_) => _baseScaleFontSize = _fontSize,
                               onScaleUpdate: (details) {
-                                final diff = (details.scale - 1).abs();
-                                if (diff < _kScaleDeadZone) return;
-
+                                if ((details.scale - 1).abs() < _kScaleDeadZone) return;
                                 _applyFontSize(_baseScaleFontSize * details.scale);
                               },
                               child: CodeTheme(
@@ -1335,8 +1323,7 @@ class _PackEditorPageState extends State<PackEditorPage> {
                                     margin: 0,
                                     textAlign: TextAlign.end,
                                     textStyle: editorTextStyle.copyWith(
-                                      color: cs.onSurfaceVariant
-                                          .withValues(alpha: 0.4),
+                                      color: cs.onSurfaceVariant.withValues(alpha: 0.4),
                                     ),
                                   ),
                                   textStyle: editorTextStyle,
@@ -1385,8 +1372,7 @@ class _PackEditorPageState extends State<PackEditorPage> {
                     onTap: () => _insertText(s),
                     borderRadius: BorderRadius.circular(6),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 8),
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                       decoration: BoxDecoration(
                         color: cs.surfaceContainerHigh,
                         borderRadius: BorderRadius.circular(8),
@@ -1436,8 +1422,7 @@ class _PackEditorPageState extends State<PackEditorPage> {
                       controller: _findCtrl,
                       decoration: const InputDecoration(
                         isDense: true,
-                        contentPadding:
-                            EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                        contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
                         border: OutlineInputBorder(),
                         hintText: '查找...',
                       ),
@@ -1460,11 +1445,8 @@ class _PackEditorPageState extends State<PackEditorPage> {
                   tooltip: '下一个',
                 ),
                 IconButton(
-                  icon: Icon(_caseSensitive
-                      ? Icons.text_fields
-                      : Icons.text_fields_outlined),
-                  onPressed: () =>
-                      setState(() => _caseSensitive = !_caseSensitive),
+                  icon: Icon(_caseSensitive ? Icons.text_fields : Icons.text_fields_outlined),
+                  onPressed: () => setState(() => _caseSensitive = !_caseSensitive),
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(),
                   tooltip: _caseSensitive ? '大小写敏感：开' : '大小写敏感：关',
@@ -1488,8 +1470,7 @@ class _PackEditorPageState extends State<PackEditorPage> {
                       controller: _replaceCtrl,
                       decoration: const InputDecoration(
                         isDense: true,
-                        contentPadding:
-                            EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                        contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
                         border: OutlineInputBorder(),
                         hintText: '替换为...',
                       ),
