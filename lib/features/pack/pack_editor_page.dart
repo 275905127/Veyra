@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:io';
+import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -10,6 +10,9 @@ import 'package:highlight/languages/javascript.dart';
 import 'package:highlight/languages/json.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/di/injection.dart';
+import '../../core/extension/extension_engine.dart';
+import '../source/source_controller.dart';
 import 'pack_controller.dart';
 
 class PackEditorPage extends StatefulWidget {
@@ -25,485 +28,261 @@ class PackEditorPage extends StatefulWidget {
 }
 
 class _PackEditorPageState extends State<PackEditorPage> {
+  // ===== Editor core =====
+  late final DefaultLocalAnalyzer _analyzer;
   late final CodeController _code;
-  final FocusNode _editorFocus = FocusNode(debugLabel: 'pack_editor_focus');
+  final FocusNode _focus = FocusNode();
 
   final TextEditingController _findCtrl = TextEditingController();
   final TextEditingController _replaceCtrl = TextEditingController();
-  final FocusNode _findFocus = FocusNode(debugLabel: 'pack_find_focus');
 
-  // ✅ 让 flutter_code_editor 自己做错误标注（波浪线/边栏错误）
-  // 注：DefaultLocalAnalyzer 会做本地轻量分析（括号/配对等），并驱动 errors UI。
-  final Analyzer _analyzer = DefaultLocalAnalyzer();
-
-  // =========================
-  // Page state
-  // =========================
+  // ===== UI state =====
   bool _loading = true;
   bool _saving = false;
-
   bool _showFind = false;
   bool _caseSensitive = false;
 
-  // =========================
-  // Files
-  // =========================
+  // ===== Files =====
   String _currentFileName = 'main.js';
-  List<String> _fileList = const <String>[];
+  List<String> _fileList = <String>['manifest.json', 'main.js'];
 
-  // =========================
-  // Dirty tracking
-  // =========================
+  // ===== Dirty tracking =====
   bool _dirty = false;
   String _loadedSnapshot = '';
 
-  // =========================
-  // Editor UX
-  // =========================
+  // ===== Zoom =====
   double _fontSize = 13.5;
   double _baseScaleFontSize = 13.5;
+  double _lastScale = 1.0;
 
-  // For auto indent/pair
+  // 缩放更灵敏：用“增量”而不是绝对 scale
+  // 手指微动也能触发，但有轻微阈值避免抖动
+  static const double _kScaleEpsilon = 0.015; // 越小越灵敏
+  static const double _kZoomSpeed = 14.0; // 越大缩放越快（线性增益）
+  static const double _kMinFont = 10.0;
+  static const double _kMaxFont = 32.0;
+
+  // ===== Helpers =====
   String _lastText = '';
   TextSelection _lastSel = const TextSelection.collapsed(offset: 0);
   bool _mutating = false;
 
-  Timer? _dirtyDebounce;
+  Timer? _debounceSyntaxTimer;
+  final ValueNotifier<String?> _inlineError = ValueNotifier<String?>(null);
 
-  static const String _kIndent = '  ';
-
-  static const List<String> _kSymbols = [
-    '(',
-    ')',
-    '{',
-    '}',
-    '[',
-    ']',
-    '=',
-    ':',
-    ';',
-    '.',
-    ',',
-    "'",
-    '"',
-    '`',
-    '!',
-    '?',
-    '&',
-    '|',
-    '=>',
-    'const',
-    'let',
-    'await',
-    'return',
+  static const List<String> _kSymbols = <String>[
+    '(', ')', '{', '}', '[', ']',
+    '=', ':', ';', '.', ',',
+    "'", '"', '`',
+    '!', '?', '&', '|',
+    '=>', 'const', 'let', 'await', 'return',
   ];
-
-  // Only show “reasonable” editable files by default
-  static const Set<String> _kTextExt = {
-    '.js',
-    '.mjs',
-    '.cjs',
-    '.ts',
-    '.json',
-    '.txt',
-    '.md',
-    '.css',
-    '.html',
-    '.yml',
-    '.yaml',
-  };
 
   @override
   void initState() {
     super.initState();
 
+    _analyzer = DefaultLocalAnalyzer();
+
     _code = CodeController(
       text: '',
       language: javascript,
-      analyzer: _analyzer, // ✅ 关键：启用分析器（驱动错误波浪线/边栏错误）
+      // ✅ 让编辑器具备 error underline（你的版本若支持）
+      analyzer: _analyzer,
     );
 
     _code.addListener(_onCodeChanged);
 
-    WidgetsBinding.instance.addPostFrameCallback((_) => _bootstrap());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _fetchFileListAndLoad();
+    });
   }
 
   @override
   void dispose() {
-    _dirtyDebounce?.cancel();
-
+    _debounceSyntaxTimer?.cancel();
+    _inlineError.dispose();
     _code.removeListener(_onCodeChanged);
     _code.dispose();
-
-    _editorFocus.dispose();
-    _findFocus.dispose();
-
+    _focus.dispose();
     _findCtrl.dispose();
     _replaceCtrl.dispose();
     super.dispose();
   }
 
   // =========================
-  // Bootstrap
+  // File & Loading
   // =========================
 
-  Future<void> _bootstrap() async {
+  Future<void> _fetchFileListAndLoad() async {
     try {
-      final pc = context.read<PackController>();
-
-      // 1) read manifest to decide entry
-      final manifest = await pc.packStore.readManifest(widget.packId);
-      final entry = (manifest['entry'] ?? 'main.js').toString().trim();
-      _currentFileName = entry.isEmpty ? 'main.js' : entry;
-
-      // 2) scan file list
-      final files = await _scanPackFiles();
-      // Ensure manifest + entry always on top
-      final normalized = _normalizeFileList(files, entryFile: _currentFileName);
-
-      if (!mounted) return;
-      setState(() => _fileList = normalized);
-
-      // 3) load current file
-      _applyLanguageFor(_currentFileName);
+      // 你当前工程里 PackStore 没有“列文件”API，这里维持默认 + 尝试读 entry/manifest
+      // 如果你后面补了 listFiles(packId)，这里可以替换成真实列表。
       await _loadFileContent(_currentFileName);
     } catch (e) {
       if (!mounted) return;
-      _snack('初始化失败: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('初始化失败: $e')),
+      );
       setState(() => _loading = false);
     }
   }
 
-  Future<List<String>> _scanPackFiles() async {
+  Future<void> _loadFileContent(String fileName) async {
+    setState(() {
+      _loading = true;
+      _inlineError.value = null;
+    });
+
     final pc = context.read<PackController>();
-    final dir = await pc.packStore.getPackDir(widget.packId);
+    final text = await pc.packStore.readText(widget.packId, fileName);
 
-    final out = <String>[];
+    // 设置语言（不要用 setLanguage 传多参，避免你遇到的参数错误）
+    final lang = fileName.endsWith('.json') ? json : javascript;
+    _code.language = lang;
 
-    void walk(Directory d, String prefix) {
-      final entities = d.listSync(followLinks: false);
-      for (final ent in entities) {
-        final name = ent.uri.pathSegments.isEmpty ? '' : ent.uri.pathSegments.last;
-        if (name.isEmpty) continue;
+    _mutating = true;
+    _code.text = text;
+    _code.selection = const TextSelection.collapsed(offset: 0);
+    _mutating = false;
 
-        // Skip backups + hidden folders
-        if (name == '.bak') continue;
-        if (name.startsWith('.')) {
-          if (ent is File && name == 'manifest.json') {
-            out.add(prefix.isEmpty ? name : '$prefix/$name');
-          }
-          continue;
-        }
-
-        if (ent is Directory) {
-          walk(ent, prefix.isEmpty ? name : '$prefix/$name');
-          continue;
-        }
-
-        if (ent is File) {
-          final rel = prefix.isEmpty ? name : '$prefix/$name';
-          if (_looksEditable(rel)) out.add(rel);
-        }
-      }
-    }
-
-    walk(dir, '');
-
-    // Fallback minimal list
-    if (!out.contains('manifest.json')) out.add('manifest.json');
-    return out;
-  }
-
-  bool _looksEditable(String path) {
-    final lower = path.toLowerCase();
-    if (lower.endsWith('.bak')) return false;
-    final ext = _extOf(lower);
-    if (ext.isEmpty) return true; // extensionless: still show
-    return _kTextExt.contains(ext);
-  }
-
-  String _extOf(String path) {
-    final i = path.lastIndexOf('.');
-    if (i < 0) return '';
-    return path.substring(i);
-  }
-
-  List<String> _normalizeFileList(List<String> files, {required String entryFile}) {
-    final set = <String>{...files};
-
-    // Always keep these
-    set.add('manifest.json');
-    if (entryFile.isNotEmpty) set.add(entryFile);
-
-    final list = set.toList();
-    list.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
-
-    // Pin manifest + entry
-    list.remove('manifest.json');
-    list.remove(entryFile);
-
-    final pinned = <String>['manifest.json'];
-    if (entryFile.isNotEmpty) pinned.add(entryFile);
-
-    // Avoid duplication if entry == manifest
-    final pinnedUnique = <String>[];
-    for (final p in pinned) {
-      if (p.isEmpty) continue;
-      if (!pinnedUnique.contains(p)) pinnedUnique.add(p);
-    }
-
-    return <String>[
-      ...pinnedUnique,
-      ...list,
-    ];
-  }
-
-  // =========================
-  // File load / save / switch
-  // =========================
-
-  Future<void> _switchFile(String fileName) async {
-    if (fileName == _currentFileName) {
-      if (mounted) Navigator.pop(context); // close drawer
-      return;
-    }
-
-    // If dirty, ask whether save
-    if (_dirty) {
-      final decision = await showDialog<_DirtyDecision>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('未保存更改'),
-          content: Text('文件 "$_currentFileName" 有未保存的修改。'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, _DirtyDecision.cancel),
-              child: const Text('取消'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, _DirtyDecision.discard),
-              child: const Text('放弃更改', style: TextStyle(color: Colors.red)),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, _DirtyDecision.save),
-              child: const Text('保存并切换'),
-            ),
-          ],
-        ),
-      );
-
-      if (decision == null || decision == _DirtyDecision.cancel) return;
-
-      if (decision == _DirtyDecision.save) {
-        final ok = await _save();
-        if (!ok) return; // save failed, do not switch
-      }
-      // discard -> continue switching
-    }
-
-    if (!mounted) return;
+    _loadedSnapshot = text;
+    _lastText = text;
+    _lastSel = _code.selection;
+    _dirty = false;
 
     setState(() {
       _currentFileName = fileName;
-      _loading = true;
+      _loading = false;
     });
 
-    _applyLanguageFor(fileName);
-    await _loadFileContent(fileName);
+    // 初次加载也跑一次轻量检查（用于顶部提示，不影响 squiggle）
+    _scheduleLightSyntaxCheck();
+  }
 
+  Future<void> _switchFile(String fileName) async {
+    if (fileName == _currentFileName) return;
+
+    if (_dirty) {
+      final ok = await _confirmDiscard();
+      if (ok != true) return;
+    }
     if (!mounted) return;
-    Navigator.pop(context); // close drawer
+    await _loadFileContent(fileName);
   }
 
-  void _applyLanguageFor(String fileName) {
-    final lower = fileName.toLowerCase();
-    if (lower.endsWith('.json')) {
-      // ✅ setLanguage 会刷新 analyzer 与语言绑定（更稳）
-      _code.setLanguage(json, _analyzer);
-    } else {
-      _code.setLanguage(javascript, _analyzer);
-    }
-  }
-
-  Future<void> _loadFileContent(String fileName) async {
-    try {
-      final pc = context.read<PackController>();
-      final code = await pc.packStore.readText(widget.packId, fileName);
-
-      if (!mounted) return;
-
-      _mutating = true;
-      _code.text = code;
-      _code.selection = const TextSelection.collapsed(offset: 0);
-
-      _loadedSnapshot = code;
-      _setDirty(false);
-
-      _lastText = _code.text;
-      _lastSel = _code.selection;
-    } catch (e) {
-      if (!mounted) return;
-      _snack('加载 $fileName 失败: $e');
-    } finally {
-      _mutating = false;
-      if (mounted) setState(() => _loading = false);
-    }
-  }
-
-  Future<bool> _save() async {
-    if (_saving) return false;
-    setState(() => _saving = true);
-
-    try {
-      final pc = context.read<PackController>();
-      await pc.packStore.writeTextWithBackup(
-        widget.packId,
-        _currentFileName,
-        _code.text,
-        keep: 5,
-      );
-
-      if (!mounted) return true;
-
-      _loadedSnapshot = _code.text;
-      _setDirty(false);
-      _snack('已保存 $_currentFileName');
-      return true;
-    } catch (e) {
-      if (!mounted) return false;
-      _snack('保存失败: $e');
-      return false;
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  void _snack(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  Future<bool?> _confirmDiscard() {
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('未保存的更改'),
+        content: const Text('当前文件有未保存的修改，要放弃并切换文件吗？'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('放弃')),
+        ],
+      ),
+    );
   }
 
   // =========================
-  // Dirty + editor change
+  // Dirty tracking
   // =========================
-
-  void _setDirty(bool v) {
-    if (_dirty == v) return;
-    setState(() => _dirty = v);
-  }
 
   void _onCodeChanged() {
     if (_mutating) return;
 
-    final newText = _code.text;
-    final newSel = _code.selection;
+    final t = _code.text;
+    final sel = _code.selection;
 
-    // Dirty detection (debounced to reduce rebuild pressure)
-    _dirtyDebounce?.cancel();
-    _dirtyDebounce = Timer(const Duration(milliseconds: 120), () {
+    // dirty
+    final nowDirty = t != _loadedSnapshot;
+    if (nowDirty != _dirty) {
+      setState(() => _dirty = nowDirty);
+    }
+
+    _lastText = t;
+    _lastSel = sel;
+
+    // ✅ 轻量语法检查：防止频繁阻塞（squiggle 由 analyzer 自己做）
+    _scheduleLightSyntaxCheck();
+  }
+
+  void _scheduleLightSyntaxCheck() {
+    _debounceSyntaxTimer?.cancel();
+    _debounceSyntaxTimer = Timer(const Duration(milliseconds: 280), () {
       if (!mounted) return;
-      final isDirtyNow = (_code.text != _loadedSnapshot);
-      if (_dirty != isDirtyNow) setState(() => _dirty = isDirtyNow);
+      final err = _lightSyntaxCheck(_currentFileName, _code.text);
+      _inlineError.value = err;
     });
-
-    // Auto behaviors only when “one char inserted”
-    if (newText != _lastText) {
-      _autoIndent(newText, newSel);
-      _autoPair(newText, newSel);
-    }
-
-    _lastText = _code.text;
-    _lastSel = _code.selection;
   }
 
-  void _autoIndent(String newText, TextSelection newSel) {
-    if (_mutating) return;
-    if (!newSel.isCollapsed) return;
-
-    final oldText = _lastText;
-    final oldSel = _lastSel;
-    if (!oldSel.isCollapsed) return;
-
-    final o = oldSel.baseOffset;
-    final n = newSel.baseOffset;
-    if (n != o + 1) return;
-
-    if (o < 0 || o > oldText.length) return;
-    if (n < 0 || n > newText.length) return;
-
-    if (o >= newText.length) return;
-    if (newText[o] != '\n') return;
-
-    final prevLineStart = newText.lastIndexOf('\n', o - 1) + 1;
-    final prevLine = newText.substring(prevLineStart, o);
-
-    final indent = RegExp(r'^[ \t]+').firstMatch(prevLine)?.group(0) ?? '';
-    final trimmed = prevLine.trimRight();
-    final extra = trimmed.endsWith('{') ? _kIndent : '';
-    final insert = indent + extra;
-    if (insert.isEmpty) return;
-
-    _mutating = true;
-    try {
-      final before = newText.substring(0, n);
-      final after = newText.substring(n);
-      _code.text = before + insert + after;
-      _code.selection = TextSelection.collapsed(offset: n + insert.length);
-    } finally {
-      _mutating = false;
-    }
-  }
-
-  void _autoPair(String newText, TextSelection newSel) {
-    if (_mutating) return;
-    if (!newSel.isCollapsed) return;
-
-    final oldSel = _lastSel;
-    if (!oldSel.isCollapsed) return;
-
-    final o = oldSel.baseOffset;
-    final n = newSel.baseOffset;
-    if (n != o + 1) return;
-    if (o < 0 || o >= newText.length) return;
-
-    final inserted = newText[o];
-    final pair = _pairFor(inserted);
-    if (pair == null) return;
-
-    final nextChar = (n < newText.length) ? newText[n] : '';
-    if (nextChar == pair) return;
-
-    if ((inserted == '"' || inserted == "'" || inserted == '`') && o - 1 >= 0) {
-      final prev = newText[o - 1];
-      if (RegExp(r'[A-Za-z0-9_\\]').hasMatch(prev)) return;
-    }
-
-    _mutating = true;
-    try {
-      final before = newText.substring(0, n);
-      final after = newText.substring(n);
-      _code.text = before + pair + after;
-      _code.selection = TextSelection.collapsed(offset: n);
-    } finally {
-      _mutating = false;
-    }
-  }
-
-  String? _pairFor(String ch) {
-    switch (ch) {
-      case '(':
-        return ')';
-      case '[':
-        return ']';
-      case '{':
-        return '}';
-      case '"':
-        return '"';
-      case "'":
-        return "'";
-      case '`':
-        return '`';
-      default:
+  String? _lightSyntaxCheck(String fileName, String text) {
+    // 只做最轻量的“即时提示”，不替代 analyzer
+    if (fileName.endsWith('.json')) {
+      try {
+        jsonDecode(text);
         return null;
+      } catch (e) {
+        return 'JSON 解析失败：$e';
+      }
+    }
+
+    // JS 不做完整 AST（太重），只做常见括号/花括号/方括号配对检查
+    int p = 0, b = 0, c = 0;
+    for (int i = 0; i < text.length; i++) {
+      final ch = text.codeUnitAt(i);
+      if (ch == 40) p++; // (
+      if (ch == 41) p--; // )
+      if (ch == 91) b++; // [
+      if (ch == 93) b--; // ]
+      if (ch == 123) c++; // {
+      if (ch == 125) c--; // }
+      if (p < 0 || b < 0 || c < 0) return '括号疑似不匹配（在第 ${i + 1} 个字符附近）';
+    }
+    if (p != 0 || b != 0 || c != 0) return '括号疑似不匹配（未闭合）';
+    return null;
+  }
+
+  // =========================
+  // Save (and live apply)
+  // =========================
+
+  Future<void> _save() async {
+    if (_saving || _loading) return;
+
+    setState(() => _saving = true);
+    try {
+      final pc = context.read<PackController>();
+
+      await pc.packStore.writeTextWithBackup(
+        widget.packId,
+        _currentFileName,
+        _code.text,
+      );
+
+      _loadedSnapshot = _code.text;
+      if (_dirty) setState(() => _dirty = false);
+
+      // ✅ 保存后实时生效：清 JS runtime cache（确保 main.js 立刻重载）
+      getIt<ExtensionEngine>().clearRuntimeCache(widget.packId);
+
+      // ✅ manifest 或 entry 改了：让列表/源注册立即刷新
+      // 这里用 load() 兜底，避免你工程里 Editor API 不全导致“保存没效果”
+      await context.read<PackController>().load();
+      await context.read<SourceController>().load();
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('已保存并立即生效 ✅')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('保存失败: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _saving = false);
     }
   }
 
@@ -511,78 +290,47 @@ class _PackEditorPageState extends State<PackEditorPage> {
   // Find / Replace
   // =========================
 
-  String _norm(String s) => _caseSensitive ? s : s.toLowerCase();
-
-  bool _selectRange(int start, int end) {
-    if (start < 0 || end < 0 || start > end || end > _code.text.length) return false;
-    _mutating = true;
-    try {
-      _code.selection = TextSelection(baseOffset: start, extentOffset: end);
-    } finally {
-      _mutating = false;
+  void _toggleFind() {
+    setState(() {
+      _showFind = !_showFind;
+    });
+    if (_showFind) {
+      Future.delayed(const Duration(milliseconds: 80), () {
+        if (!mounted) return;
+        FocusScope.of(context).requestFocus();
+      });
     }
-    _editorFocus.requestFocus();
-    return true;
   }
 
   void _findNext() {
-    final q0 = _findCtrl.text;
-    if (q0.isEmpty) return;
+    final query = _findCtrl.text;
+    if (query.isEmpty) return;
 
     final text = _code.text;
-    final q = _norm(q0);
-    final t = _norm(text);
+    final start = math.max(0, _code.selection.end);
+    final source = _caseSensitive ? text : text.toLowerCase();
+    final q = _caseSensitive ? query : query.toLowerCase();
 
-    final sel = _code.selection;
-    final from = sel.isCollapsed ? sel.baseOffset : sel.extentOffset;
-
-    final i = t.indexOf(q, from.clamp(0, t.length));
-    if (i >= 0) {
-      _selectRange(i, i + q.length);
+    int idx = source.indexOf(q, start);
+    if (idx < 0 && start > 0) {
+      idx = source.indexOf(q, 0);
+    }
+    if (idx < 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('未找到')),
+      );
       return;
     }
 
-    final w = t.indexOf(q, 0);
-    if (w >= 0) {
-      _selectRange(w, w + q.length);
-      return;
-    }
-
-    _snack('找不到');
-  }
-
-  void _findPrev() {
-    final q0 = _findCtrl.text;
-    if (q0.isEmpty) return;
-
-    final text = _code.text;
-    final q = _norm(q0);
-    final t = _norm(text);
-
-    final sel = _code.selection;
-    final from = sel.isCollapsed ? sel.baseOffset : sel.baseOffset;
-
-    final cut = from.clamp(0, t.length);
-    final sub = t.substring(0, cut);
-
-    final i = sub.lastIndexOf(q);
-    if (i >= 0) {
-      _selectRange(i, i + q.length);
-      return;
-    }
-
-    final w = t.lastIndexOf(q);
-    if (w >= 0) {
-      _selectRange(w, w + q.length);
-      return;
-    }
-
-    _snack('找不到');
+    _mutating = true;
+    _code.selection = TextSelection(baseOffset: idx, extentOffset: idx + query.length);
+    _mutating = false;
+    _focus.requestFocus();
   }
 
   void _replaceOne() {
-    final q0 = _findCtrl.text;
-    if (q0.isEmpty) return;
+    final query = _findCtrl.text;
+    if (query.isEmpty) return;
 
     final sel = _code.selection;
     if (sel.isCollapsed) {
@@ -590,460 +338,390 @@ class _PackEditorPageState extends State<PackEditorPage> {
       return;
     }
 
-    final text = _code.text;
-    final selected = text.substring(sel.start, sel.end);
-    final match = _caseSensitive ? (selected == q0) : (_norm(selected) == _norm(q0));
-    if (!match) {
+    final selected = _code.text.substring(sel.start, sel.end);
+    final hit = _caseSensitive ? selected == query : selected.toLowerCase() == query.toLowerCase();
+    if (!hit) {
       _findNext();
       return;
     }
 
-    final rep = _replaceCtrl.text;
-
-    _mutating = true;
-    try {
-      final before = text.substring(0, sel.start);
-      final after = text.substring(sel.end);
-      _code.text = before + rep + after;
-
-      final caret = sel.start + rep.length;
-      _code.selection = TextSelection.collapsed(offset: caret);
-    } finally {
-      _mutating = false;
-    }
+    _replaceRange(sel.start, sel.end, _replaceCtrl.text);
+    _findNext();
   }
 
   void _replaceAll() {
-    final q0 = _findCtrl.text;
-    if (q0.isEmpty) return;
+    final query = _findCtrl.text;
+    if (query.isEmpty) return;
 
-    final rep = _replaceCtrl.text;
     final text = _code.text;
+    final source = _caseSensitive ? text : text.toLowerCase();
+    final q = _caseSensitive ? query : query.toLowerCase();
 
-    final out = _caseSensitive ? text.replaceAll(q0, rep) : _replaceAllCaseInsensitive(text, q0, rep);
+    int count = 0;
+    int idx = source.indexOf(q, 0);
+    if (idx < 0) return;
 
-    if (out == text) {
-      _snack('没有可替换项');
-      return;
+    final buf = StringBuffer();
+    int last = 0;
+    while (idx >= 0) {
+      buf.write(text.substring(last, idx));
+      buf.write(_replaceCtrl.text);
+      last = idx + query.length;
+      count++;
+      idx = source.indexOf(q, last);
     }
+    buf.write(text.substring(last));
 
     _mutating = true;
-    try {
-      _code.text = out;
-      _code.selection = const TextSelection.collapsed(offset: 0);
-    } finally {
-      _mutating = false;
-    }
+    _code.text = buf.toString();
+    _code.selection = TextSelection.collapsed(offset: math.min(_code.text.length, last));
+    _mutating = false;
 
-    _snack('替换完成');
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('替换完成：$count 处')),
+    );
   }
 
-  String _replaceAllCaseInsensitive(String text, String needle, String rep) {
-    final tl = text.toLowerCase();
-    final nl = needle.toLowerCase();
-
-    int i = 0;
-    final sb = StringBuffer();
-
-    while (true) {
-      final k = tl.indexOf(nl, i);
-      if (k < 0) {
-        sb.write(text.substring(i));
-        break;
-      }
-      sb.write(text.substring(i, k));
-      sb.write(rep);
-      i = k + needle.length;
-    }
-
-    return sb.toString();
-  }
-
-  void _toggleFind() {
-    setState(() => _showFind = !_showFind);
-    if (_showFind) {
-      Future.microtask(() => _findFocus.requestFocus());
-    } else {
-      Future.microtask(() => _editorFocus.requestFocus());
-    }
-  }
-
-  // =========================
-  // Indent / insert helpers
-  // =========================
-
-  void _indentSelection({bool outdent = false}) {
+  void _replaceRange(int start, int end, String replacement) {
     final text = _code.text;
-    final sel = _code.selection;
+    final newText = text.replaceRange(start, end, replacement);
+    _mutating = true;
+    _code.text = newText;
+    _code.selection = TextSelection.collapsed(offset: start + replacement.length);
+    _mutating = false;
+  }
 
+  // =========================
+  // Formatting helpers
+  // =========================
+
+  void _indentSelection() {
+    final sel = _code.selection;
+    if (sel.isCollapsed) return;
+
+    final text = _code.text;
     final start = sel.start;
     final end = sel.end;
 
-    final int lineStart = text.lastIndexOf('\n', (start - 1).clamp(0, text.length)) + 1;
+    final before = text.substring(0, start);
+    final mid = text.substring(start, end);
+    final after = text.substring(end);
 
-    int lineEnd = end;
-    if (lineEnd < text.length) {
-      final nextNl = text.indexOf('\n', lineEnd);
-      if (nextNl >= 0) lineEnd = nextNl;
-    }
-
-    final block = text.substring(lineStart, lineEnd);
-    final lines = block.split('\n');
-
-    final newLines = <String>[];
-    int delta = 0;
-
-    for (final line in lines) {
-      if (!outdent) {
-        newLines.add(_kIndent + line);
-        delta += _kIndent.length;
-      } else {
-        if (line.startsWith(_kIndent)) {
-          newLines.add(line.substring(_kIndent.length));
-          delta -= _kIndent.length;
-        } else if (line.startsWith('\t')) {
-          newLines.add(line.substring(1));
-          delta -= 1;
-        } else if (line.startsWith(' ')) {
-          final cut = line.startsWith('  ') ? 2 : 1;
-          newLines.add(line.substring(cut));
-          delta -= cut;
-        } else {
-          newLines.add(line);
-        }
-      }
-    }
-
-    final replaced = newLines.join('\n');
+    final lines = mid.split('\n');
+    final indented = lines.map((l) => l.isEmpty ? l : '  $l').join('\n');
 
     _mutating = true;
-    try {
-      _code.text = text.substring(0, lineStart) + replaced + text.substring(lineEnd);
-
-      final newStart = (start + (!outdent ? _kIndent.length : 0)).clamp(0, _code.text.length);
-      final newEnd = (end + delta).clamp(0, _code.text.length);
-
-      _code.selection = TextSelection(baseOffset: newStart, extentOffset: newEnd);
-    } finally {
-      _mutating = false;
-    }
-
-    _editorFocus.requestFocus();
-  }
-
-  void _insertTab() => _insertText(_kIndent);
-
-  void _insertText(String text) {
-    if (_mutating) return;
-
-    _mutating = true;
-    try {
-      final sel = _code.selection;
-      final start = sel.start < 0 ? 0 : sel.start;
-      final end = sel.end < 0 ? 0 : sel.end;
-
-      final before = _code.text.substring(0, start);
-      final after = _code.text.substring(end);
-
-      _code.text = before + text + after;
-      _code.selection = TextSelection.collapsed(offset: start + text.length);
-    } finally {
-      _mutating = false;
-    }
-
-    _editorFocus.requestFocus();
+    _code.text = before + indented + after;
+    _code.selection = TextSelection(baseOffset: start, extentOffset: start + indented.length);
+    _mutating = false;
   }
 
   void _resetCode() {
     _mutating = true;
-    try {
-      _code.text = _loadedSnapshot;
-      _code.selection = TextSelection.collapsed(offset: _code.text.length);
-    } finally {
-      _mutating = false;
+    _code.text = _loadedSnapshot;
+    _code.selection = const TextSelection.collapsed(offset: 0);
+    _mutating = false;
+    setState(() => _dirty = false);
+  }
+
+  void _checkSyntax() {
+    final err = _lightSyntaxCheck(_currentFileName, _code.text);
+    if (err == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('未发现明显语法问题 ✅')),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(err)),
+      );
     }
-    _setDirty(false);
   }
 
   // =========================
-  // Back navigation guard
+  // Accessory bar insert
   // =========================
 
-  Future<bool> _confirmDiscardIfDirty() async {
-    if (!_dirty) return true;
+  void _insertTab() => _insertText('  ');
 
-    final decision = await showDialog<_DirtyDecision>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('未保存更改'),
-        content: const Text('有未保存的修改，确定要退出吗？'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, _DirtyDecision.cancel),
-            child: const Text('取消'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, _DirtyDecision.discard),
-            child: const Text('退出', style: TextStyle(color: Colors.red)),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, _DirtyDecision.save),
-            child: const Text('保存并退出'),
-          ),
-        ],
-      ),
-    );
+  void _insertText(String s) {
+    final text = _code.text;
+    final sel = _code.selection;
+    final start = math.max(0, sel.start);
+    final end = math.max(0, sel.end);
 
-    if (decision == null || decision == _DirtyDecision.cancel) return false;
-    if (decision == _DirtyDecision.discard) return true;
+    final newText = text.replaceRange(start, end, s);
+    final newOffset = start + s.length;
 
-    return _save();
+    _mutating = true;
+    _code.text = newText;
+    _code.selection = TextSelection.collapsed(offset: newOffset);
+    _mutating = false;
+
+    _focus.requestFocus();
   }
 
   // =========================
-  // UI helpers
+  // UI
   // =========================
-
-  // ✅ 精确测量行号宽度，避免“10”被折成“1\n0”
-  double _measureLineNumberGutterWidth({
-    required BuildContext context,
-    required TextStyle style,
-    required int lineCount,
-  }) {
-    final digits = math.max(1, lineCount).toString().length;
-    final sample = List.filled(digits, '8').join(); // “8888”最宽，保守估算
-    final tp = TextPainter(
-      text: TextSpan(text: sample, style: style),
-      textDirection: Directionality.of(context),
-      maxLines: 1,
-    )..layout();
-
-    // 左右留白 + 轻微冗余，彻底杜绝折行
-    return tp.width + 18.0;
-  }
-
-  // ✅ 缩放加速曲线：scale 变化“更灵敏”
-  double _applyZoomCurve(double base, double rawScale) {
-    // rawScale 通常在 0.9~1.1 附近抖动；这里做“非线性放大”
-    final d = (rawScale - 1.0);
-    final boosted = 1.0 + d * 2.6; // 灵敏度系数（越大越敏）
-    // 额外再给一点曲线，让小幅度 pinch 也明显
-    final curved = boosted >= 1 ? math.pow(boosted, 1.15).toDouble() : math.pow(boosted, 1.05).toDouble();
-    return (base * curved).clamp(10.0, 32.0);
-  }
 
   @override
   Widget build(BuildContext context) {
-    final title = _dirty ? '$_currentFileName *' : _currentFileName;
     final cs = Theme.of(context).colorScheme;
+    final title = '${widget.packId} / $_currentFileName${_dirty ? ' *' : ''}';
 
-    final int lineCount = _code.text.isEmpty ? 1 : _code.text.split('\n').length;
+    // gutter width: line count -> digits
+    final lineCount = '\n'.allMatches(_code.text).length + 1;
+    final digits = math.max(2, lineCount.toString().length);
+    final gutterWidth = (digits * (_fontSize * 0.62) + 20).clamp(44.0, 84.0);
 
-    final gutterTextStyle = TextStyle(
-      fontFamily: 'monospace',
-      color: cs.onSurfaceVariant.withValues(alpha: 0.45),
-      height: 1.35,
-      fontSize: _fontSize,
-    );
-
-    final gutterWidth = _measureLineNumberGutterWidth(
-      context: context,
-      style: gutterTextStyle,
-      lineCount: lineCount,
-    );
-
-    final shortcuts = <ShortcutActivator, Intent>{
-      // Save
-      const SingleActivator(LogicalKeyboardKey.keyS, control: true): const _SaveIntent(),
-      const SingleActivator(LogicalKeyboardKey.keyS, meta: true): const _SaveIntent(),
-      // Find
-      const SingleActivator(LogicalKeyboardKey.keyF, control: true): const _FindIntent(),
-      const SingleActivator(LogicalKeyboardKey.keyF, meta: true): const _FindIntent(),
-      // Indent / Outdent
-      const SingleActivator(LogicalKeyboardKey.bracketRight, control: true): const _IndentIntent(false),
-      const SingleActivator(LogicalKeyboardKey.bracketLeft, control: true): const _IndentIntent(true),
-      const SingleActivator(LogicalKeyboardKey.bracketRight, meta: true): const _IndentIntent(false),
-      const SingleActivator(LogicalKeyboardKey.bracketLeft, meta: true): const _IndentIntent(true),
-    };
-
-    final actions = <Type, Action<Intent>>{
-      _SaveIntent: CallbackAction<_SaveIntent>(
-        onInvoke: (_) {
-          if (!_loading && !_saving) _save();
-          return null;
-        },
+    return Scaffold(
+      drawer: Drawer(
+        child: SafeArea(
+          child: Column(
+            children: [
+              const ListTile(
+                leading: Icon(Icons.folder_open),
+                title: Text('文件'),
+              ),
+              const Divider(height: 1),
+              Expanded(
+                child: ListView.builder(
+                  itemCount: _fileList.length,
+                  itemBuilder: (context, i) {
+                    final f = _fileList[i];
+                    final isSelected = f == _currentFileName;
+                    return ListTile(
+                      leading: Icon(
+                        f.endsWith('.json') ? Icons.data_object : Icons.javascript,
+                        color: isSelected ? cs.primary : null,
+                      ),
+                      title: Text(
+                        f,
+                        style: TextStyle(
+                          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                          color: isSelected ? cs.primary : null,
+                        ),
+                      ),
+                      selected: isSelected,
+                      onTap: () {
+                        Navigator.pop(context);
+                        _switchFile(f);
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
-      _FindIntent: CallbackAction<_FindIntent>(
-        onInvoke: (_) {
-          _toggleFind();
-          return null;
-        },
+      appBar: AppBar(
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: const TextStyle(fontSize: 16)),
+            ValueListenableBuilder<String?>(
+              valueListenable: _inlineError,
+              builder: (_, err, __) {
+                if (err == null) return const SizedBox.shrink();
+                return Text(
+                  err,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 12, color: cs.error),
+                );
+              },
+            ),
+          ],
+        ),
+        actions: [
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert),
+            onSelected: (v) {
+              if (v == 'find') _toggleFind();
+              if (v == 'syntax') _checkSyntax();
+              if (v == 'format') _indentSelection();
+              if (v == 'reset') _resetCode();
+            },
+            itemBuilder: (ctx) => const [
+              PopupMenuItem(
+                value: 'find',
+                child: ListTile(
+                  dense: true,
+                  leading: Icon(Icons.search),
+                  title: Text('查找替换'),
+                ),
+              ),
+              PopupMenuItem(
+                value: 'syntax',
+                child: ListTile(
+                  dense: true,
+                  leading: Icon(Icons.rule),
+                  title: Text('语法检查'),
+                ),
+              ),
+              PopupMenuItem(
+                value: 'format',
+                child: ListTile(
+                  dense: true,
+                  leading: Icon(Icons.format_indent_increase),
+                  title: Text('代码缩进'),
+                ),
+              ),
+              PopupMenuItem(
+                value: 'reset',
+                child: ListTile(
+                  dense: true,
+                  leading: Icon(Icons.restart_alt),
+                  title: Text('还原更改'),
+                ),
+              ),
+            ],
+          ),
+          IconButton(
+            tooltip: '保存',
+            icon: _saving
+                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.save),
+            onPressed: (_loading || _saving) ? null : _save,
+          ),
+        ],
       ),
-      _IndentIntent: CallbackAction<_IndentIntent>(
-        onInvoke: (i) {
-          _indentSelection(outdent: i.outdent);
-          return null;
-        },
-      ),
-    };
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : Column(
+              children: [
+                if (_showFind) _buildFindBar(context),
+                const Divider(height: 1),
 
-    return PopScope(
-      canPop: !_dirty,
-      onPopInvokedWithResult: (didPop, _) async {
-        if (didPop) return;
-        final ok = await _confirmDiscardIfDirty();
-        if (!context.mounted) return;
-        if (ok) Navigator.pop(context);
-      },
-      child: Shortcuts(
-        shortcuts: shortcuts,
-        child: Actions(
-          actions: actions,
-          child: Focus(
-            autofocus: true,
-            child: Scaffold(
-              drawer: Drawer(
-                width: 280,
-                child: Column(
-                  children: [
-                    DrawerHeader(
-                      decoration: BoxDecoration(color: cs.surfaceContainer),
-                      child: Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(Icons.folder_zip, size: 48, color: Colors.orange),
-                            const SizedBox(height: 8),
-                            Text(
-                              widget.packId,
-                              style: const TextStyle(fontWeight: FontWeight.bold),
-                              textAlign: TextAlign.center,
-                            ),
-                          ],
+                Expanded(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onScaleStart: (_) {
+                      _baseScaleFontSize = _fontSize;
+                      _lastScale = 1.0;
+                    },
+                    onScaleUpdate: (details) {
+                      // ✅ 更灵敏：用增量 scale，且阈值更低
+                      final ds = details.scale / _lastScale;
+                      _lastScale = details.scale;
+
+                      // 微抖过滤
+                      if ((ds - 1.0).abs() < _kScaleEpsilon) return;
+
+                      // 线性增益：ds>1 放大，ds<1 缩小
+                      final delta = (ds - 1.0) * _kZoomSpeed;
+
+                      setState(() {
+                        _fontSize = (_fontSize + delta).clamp(_kMinFont, _kMaxFont);
+                      });
+                    },
+                    child: CodeTheme(
+                      data: CodeThemeData(styles: atomOneDarkTheme),
+                      child: CodeField(
+                        controller: _code,
+                        // ✅ 你的版本如果要求 analyzer，这里也给（不再用 Analyzer 类型）
+                        analyzer: _analyzer,
+                        focusNode: _focus,
+                        expands: true,
+                        wrap: false,
+                        gutterStyle: GutterStyle(
+                          width: gutterWidth,
+                          // ✅ 去掉折叠手柄 & 背景，避免“上下分割”的观感
+                          showFoldingHandles: false,
+                          background: Colors.transparent,
+                          margin: 0,
+                          textAlign: TextAlign.end,
+                          textStyle: TextStyle(
+                            color: cs.onSurfaceVariant.withValues(alpha: 0.40),
+                            height: 1.35,
+                            fontSize: _fontSize,
+                          ),
+                        ),
+                        textStyle: TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: _fontSize,
+                          height: 1.35,
                         ),
                       ),
                     ),
-                    Expanded(
-                      child: _fileList.isEmpty
-                          ? const Center(child: Text('没有可编辑文件'))
-                          : ListView.builder(
-                              itemCount: _fileList.length,
-                              itemBuilder: (context, index) {
-                                final f = _fileList[index];
-                                final isSelected = f == _currentFileName;
-                                final isJson = f.toLowerCase().endsWith('.json');
-                                return ListTile(
-                                  leading: Icon(
-                                    isJson ? Icons.data_object : Icons.javascript,
-                                    color: isSelected ? cs.primary : null,
-                                  ),
-                                  title: Text(
-                                    f,
-                                    style: TextStyle(
-                                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                      color: isSelected ? cs.primary : null,
-                                    ),
-                                  ),
-                                  selected: isSelected,
-                                  onTap: () => _switchFile(f),
-                                );
-                              },
-                            ),
-                    ),
-                  ],
+                  ),
                 ),
+
+                _buildAccessoryBar(context),
+              ],
+            ),
+    );
+  }
+
+  Widget _buildFindBar(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainer,
+        border: Border(bottom: BorderSide(color: cs.outlineVariant)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: _findCtrl,
+              decoration: const InputDecoration(
+                isDense: true,
+                labelText: '查找',
+                border: OutlineInputBorder(),
               ),
-              appBar: AppBar(
-                title: Text(title, style: const TextStyle(fontSize: 16)),
-                actions: [
-                  IconButton(
-                    tooltip: '查找替换 (Ctrl/⌘+F)',
-                    icon: const Icon(Icons.search),
-                    onPressed: _toggleFind,
-                  ),
-                  IconButton(
-                    tooltip: '还原更改',
-                    icon: const Icon(Icons.restart_alt),
-                    onPressed: _dirty ? _resetCode : null,
-                  ),
-                  IconButton(
-                    tooltip: '保存 (Ctrl/⌘+S)',
-                    icon: _saving
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.save),
-                    onPressed: (_loading || _saving) ? null : _save,
-                  ),
-                ],
-              ),
-              body: _loading
-                  ? const Center(child: CircularProgressIndicator())
-                  : Column(
-                      children: [
-                        if (_showFind) _buildFindBar(context),
-                        const Divider(height: 1),
-                        Expanded(
-                          child: GestureDetector(
-                            behavior: HitTestBehavior.opaque,
-                            onScaleStart: (_) => _baseScaleFontSize = _fontSize,
-                            onScaleUpdate: (details) {
-                              // ✅ 更灵敏缩放
-                              setState(() {
-                                _fontSize = _applyZoomCurve(_baseScaleFontSize, details.scale);
-                              });
-                            },
-                            child: CodeTheme(
-                              data: CodeThemeData(styles: atomOneDarkTheme),
-                              child: CodeField(
-                                controller: _code,
-                                focusNode: _editorFocus,
-                                expands: true,
-                                wrap: false,
-
-                                // ✅ 关键：打开 gutter errors（波浪线/错误提示由 analyzer 驱动）
-                                gutterStyle: GutterStyle(
-                                  width: gutterWidth,
-                                  showFoldingHandles: false,
-                                  showLineNumbers: true,
-                                  showErrors: true, // ✅ 错误波浪线/错误 UI
-                                  background: Colors.transparent,
-                                  margin: 0,
-                                  textAlign: TextAlign.end,
-                                  textStyle: gutterTextStyle,
-                                ),
-
-                                textStyle: TextStyle(
-                                  fontFamily: 'monospace',
-                                  fontSize: _fontSize,
-                                  height: 1.35,
-                                ),
-
-                                // ✅ 可选：对特定行号做自定义（这里保持默认，但确保不换行）
-                                lineNumberBuilder: (line, style) {
-                                  final s = (style ?? gutterTextStyle).copyWith(
-                                    fontFamily: 'monospace',
-                                  );
-                                  return TextSpan(text: '$line', style: s);
-                                },
-                              ),
-                            ),
-                          ),
-                        ),
-                        _buildAccessoryBar(context),
-                      ],
-                    ),
+              onSubmitted: (_) => _findNext(),
             ),
           ),
-        ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: TextField(
+              controller: _replaceCtrl,
+              decoration: const InputDecoration(
+                isDense: true,
+                labelText: '替换为',
+                border: OutlineInputBorder(),
+              ),
+              onSubmitted: (_) => _replaceOne(),
+            ),
+          ),
+          const SizedBox(width: 8),
+          IconButton(
+            tooltip: '区分大小写',
+            onPressed: () => setState(() => _caseSensitive = !_caseSensitive),
+            icon: Icon(_caseSensitive ? Icons.text_fields : Icons.title),
+          ),
+          IconButton(
+            tooltip: '下一个',
+            onPressed: _findNext,
+            icon: const Icon(Icons.keyboard_arrow_down),
+          ),
+          IconButton(
+            tooltip: '替换',
+            onPressed: _replaceOne,
+            icon: const Icon(Icons.find_replace),
+          ),
+          IconButton(
+            tooltip: '全部替换',
+            onPressed: _replaceAll,
+            icon: const Icon(Icons.playlist_add_check),
+          ),
+          IconButton(
+            tooltip: '关闭',
+            onPressed: _toggleFind,
+            icon: const Icon(Icons.close),
+          ),
+        ],
       ),
     );
   }
 
   Widget _buildAccessoryBar(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+
     return Container(
       height: 48,
       decoration: BoxDecoration(
@@ -1059,12 +737,13 @@ class _PackEditorPageState extends State<PackEditorPage> {
             width: 60,
           ),
           VerticalDivider(width: 1, color: cs.outlineVariant),
+
           Expanded(
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 6),
               itemCount: _kSymbols.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 4),
+              separatorBuilder: (_, __) => const SizedBox(width: 6),
               itemBuilder: (context, index) {
                 final s = _kSymbols[index];
                 return Center(
@@ -1075,14 +754,15 @@ class _PackEditorPageState extends State<PackEditorPage> {
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                       decoration: BoxDecoration(
                         color: cs.surfaceContainerHigh,
-                        borderRadius: BorderRadius.circular(8),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: cs.outlineVariant),
                       ),
                       child: Text(
                         s,
                         style: TextStyle(
                           fontFamily: 'monospace',
-                          fontWeight: FontWeight.bold,
-                          color: cs.primary,
+                          fontSize: 12,
+                          color: cs.onSurface,
                         ),
                       ),
                     ),
@@ -1091,153 +771,59 @@ class _PackEditorPageState extends State<PackEditorPage> {
               },
             ),
           ),
+
           VerticalDivider(width: 1, color: cs.outlineVariant),
           IconButton(
-            icon: const Icon(Icons.keyboard_hide_outlined),
-            onPressed: () => _editorFocus.unfocus(),
-            tooltip: '收起键盘',
+            tooltip: '撤销',
+            onPressed: () => _code.undo(),
+            icon: const Icon(Icons.undo),
           ),
+          IconButton(
+            tooltip: '重做',
+            onPressed: () => _code.redo(),
+            icon: const Icon(Icons.redo),
+          ),
+          const SizedBox(width: 6),
         ],
-      ),
-    );
-  }
-
-  Widget _buildFindBar(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Material(
-      color: cs.surfaceContainerHigh,
-      elevation: 2,
-      child: Padding(
-        padding: const EdgeInsets.all(8),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: SizedBox(
-                    height: 36,
-                    child: TextField(
-                      focusNode: _findFocus,
-                      controller: _findCtrl,
-                      decoration: const InputDecoration(
-                        isDense: true,
-                        contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                        border: OutlineInputBorder(),
-                        hintText: '查找...',
-                      ),
-                      onSubmitted: (_) => _findNext(),
-                    ),
-                  ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.keyboard_arrow_up),
-                  onPressed: _findPrev,
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                  tooltip: '上一个',
-                ),
-                IconButton(
-                  icon: const Icon(Icons.keyboard_arrow_down),
-                  onPressed: _findNext,
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                  tooltip: '下一个',
-                ),
-                IconButton(
-                  icon: Icon(_caseSensitive ? Icons.text_fields : Icons.text_fields_outlined),
-                  onPressed: () => setState(() => _caseSensitive = !_caseSensitive),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                  tooltip: _caseSensitive ? '大小写敏感：开' : '大小写敏感：关',
-                ),
-                IconButton(
-                  icon: const Icon(Icons.close),
-                  onPressed: _toggleFind,
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                  tooltip: '关闭',
-                ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            Row(
-              children: [
-                Expanded(
-                  child: SizedBox(
-                    height: 36,
-                    child: TextField(
-                      controller: _replaceCtrl,
-                      decoration: const InputDecoration(
-                        isDense: true,
-                        contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                        border: OutlineInputBorder(),
-                        hintText: '替换为...',
-                      ),
-                      onSubmitted: (_) => _replaceOne(),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 6),
-                TextButton(onPressed: _replaceOne, child: const Text('替换')),
-                TextButton(onPressed: _replaceAll, child: const Text('全部')),
-              ],
-            ),
-          ],
-        ),
       ),
     );
   }
 }
 
-enum _DirtyDecision { cancel, discard, save }
-
 class _AccessoryBtn extends StatelessWidget {
   final String label;
-  final IconData? icon;
+  final IconData icon;
   final VoidCallback onTap;
-  final double? width;
+  final double width;
 
   const _AccessoryBtn({
     required this.label,
-    this.icon,
+    required this.icon,
     required this.onTap,
-    this.width,
+    required this.width,
   });
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    return InkWell(
-      onTap: onTap,
-      child: Container(
-        width: width,
-        alignment: Alignment.center,
-        padding: const EdgeInsets.symmetric(horizontal: 8),
-        child: icon != null
-            ? Icon(icon, size: 20, color: cs.onSurface)
-            : Text(
-                label,
-                style: TextStyle(
-                  color: cs.onSurface,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
+
+    return SizedBox(
+      width: width,
+      height: 48,
+      child: InkWell(
+        onTap: () {
+          HapticFeedback.selectionClick();
+          onTap();
+        },
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 18, color: cs.onSurfaceVariant),
+            const SizedBox(width: 6),
+            Text(label, style: TextStyle(color: cs.onSurfaceVariant)),
+          ],
+        ),
       ),
     );
   }
-}
-
-// Keyboard intents
-class _SaveIntent extends Intent {
-  const _SaveIntent();
-}
-
-class _FindIntent extends Intent {
-  const _FindIntent();
-}
-
-class _IndentIntent extends Intent {
-  final bool outdent;
-  const _IndentIntent(this.outdent);
 }
