@@ -1,51 +1,49 @@
+import 'package:flutter/foundation.dart';
+
+@immutable
 class UniWallpaper {
+  // -----------------
+  // 基础必需字段
+  // -----------------
   final String id;
-  final String thumbUrl;
-  final String fullUrl;
-  final int width;
-  final int height;
-  final int grade;
-  final String? uploader;
-  final List<String> tags;
-  // ✅ 1. 新增字段：专门用来存 JS 传过来的 Headers
-  final Map<String, String>? headers;
+  final String imageUrl;
+
+  // -----------------
+  // 预览相关
+  // -----------------
+  final String? thumbUrl;
+
+  // -----------------
+  // 显示信息
+  // -----------------
+  final String? title;        // 标题
+  final String? author;       // 作者 / 上传者
+  final String? sourceId;     // 引擎ID
+  final String? sourceName;   // 显示名称
+
+  // -----------------
+  // 图片属性
+  // -----------------
+  final int? width;
+  final int? height;
+  final int? size;            // bytes
+
+  // -----------------
+  // 分类信息
+  // -----------------
+  final List<String>? tags;
 
   const UniWallpaper({
     required this.id,
-    required this.thumbUrl,
-    required this.fullUrl,
-    required this.width,
-    required this.height,
-    this.grade = 0,
-    this.uploader,
-    this.tags = const [],
-    this.headers, // ✅ 构造函数加入
+    required this.imageUrl,
+    this.thumbUrl,
+    this.title,
+    this.author,
+    this.sourceId,
+    this.sourceName,
+    this.width,
+    this.height,
+    this.size,
+    this.tags,
   });
-
-  factory UniWallpaper.fromMap(Map<String, dynamic> m) {
-    int asInt(dynamic v) => int.tryParse((v ?? 0).toString()) ?? 0;
-    List<String> asList(dynamic v) =>
-        (v is List) ? v.map((e) => e.toString()).where((e) => e.isNotEmpty).toList() : const <String>[];
-
-    // ✅ 2. 解析 JS 传来的 headers 对象
-    Map<String, String>? headersMap;
-    if (m['headers'] is Map) {
-      headersMap = Map<String, String>.from(m['headers']);
-    }
-
-    final thumb = (m['thumbUrl'] ?? m['thumb'] ?? '').toString();
-    final full = (m['fullUrl'] ?? m['full'] ?? thumb).toString();
-
-    return UniWallpaper(
-      id: (m['id'] ?? '').toString(),
-      thumbUrl: thumb,
-      fullUrl: full,
-      width: asInt(m['width']),
-      height: asInt(m['height']),
-      grade: asInt(m['grade']),
-      uploader: ((m['uploader'] ?? '').toString().isEmpty) ? null : (m['uploader'] ?? '').toString(),
-      tags: asList(m['tags']),
-      headers: headersMap, // ✅ 赋值
-    );
-  }
 }
