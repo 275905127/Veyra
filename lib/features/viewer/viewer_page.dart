@@ -1,5 +1,3 @@
-import 'dart:math';
-
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:provider/provider.dart';
@@ -150,7 +148,8 @@ class _ViewerPageState extends State<ViewerPage> {
             // 顶部栏
             SafeArea(
               child: AppBar(
-                backgroundColor: Colors.black.withOpacity(0.3),
+                backgroundColor:
+                    Colors.black.withValues(alpha: 0.3),
                 elevation: 0,
                 leading: const BackButton(color: Colors.white),
                 title: Text(
@@ -196,7 +195,7 @@ class _InfoPanel extends StatelessWidget {
           end: Alignment.bottomCenter,
           colors: [
             Colors.transparent,
-            Colors.black.withOpacity(0.85),
+            Colors.black.withValues(alpha: 0.85),
           ],
         ),
       ),
