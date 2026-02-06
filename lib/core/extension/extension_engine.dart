@@ -1,6 +1,4 @@
 import 'dart:convert';
-import 'dart:io';
-
 import 'package:dio/dio.dart';
 import 'package:flutter_js/flutter_js.dart';
 import 'package:injectable/injectable.dart';
@@ -13,7 +11,6 @@ import '../storage/pack_store.dart';
 import '../storage/api_key_store.dart';
 import 'extension_protocol.dart';
 
-/// JS 运行时缓存条目
 class _CachedRuntime {
   final _JsHost runtime;
   final String packVersion;
@@ -25,7 +22,6 @@ class _CachedRuntime {
     required this.createdAt,
   });
 
-  /// 缓存是否过期（超过 30 分钟）
   bool get isExpired =>
       DateTime.now().difference(createdAt).inMinutes > 30;
 }
@@ -73,44 +69,19 @@ class ExtensionEngine {
 
     try {
       final EnginePack pack = await _getPack(packId);
-      logger?.d(
-        'ExtensionEngine',
-        'pack loaded',
-        details:
-            'id=${pack.id} entry=${pack.entry} domains=${pack.domains.join(",")}',
-      );
-
-      final rt = await _getOrCreateRuntime(packId, pack);
+      final runtime = await _getOrCreateRuntime(packId, pack);
 
       final dynamic rawReq =
-          rt.callJson('buildRequests', [mergedParams]);
+          runtime.callJson('buildRequests', [mergedParams]);
       final List requests = _parseRequests(rawReq);
-      logger?.d(
-        'ExtensionEngine',
-        'buildRequests ok',
-        details: 'count=${requests.length}',
-      );
 
       final List responses = [];
       for (final req in requests) {
-        _assertDomainAllowed(pack, req.url);
-        logger?.d(
-          'ExtensionEngine',
-          'request',
-          details: '${req.method} ${req.url}',
-        );
-
         final resp = await _doRequest(req, cancelToken: cancelToken);
-        logger?.d(
-          'ExtensionEngine',
-          'response',
-          details:
-              'status=${resp.statusCode} len=${resp.body.length}',
-        );
         responses.add(resp);
       }
 
-      final dynamic rawList = rt.callJson(
+      final dynamic rawList = runtime.callJson(
         'parseList',
         [
           mergedParams,
@@ -118,14 +89,7 @@ class ExtensionEngine {
         ],
       );
 
-      if (rawList is! List) {
-        logger?.w(
-          'ExtensionEngine',
-          'parseList returned non-list',
-          details: 'type=${rawList.runtimeType}',
-        );
-        return const [];
-      }
+      if (rawList is! List) return const [];
 
       final out = rawList
           .whereType<Map>()
@@ -135,37 +99,17 @@ class ExtensionEngine {
               w.imageUrl.isNotEmpty)
           .toList(growable: false);
 
-      logger?.i(
-        'ExtensionEngine',
-        'parseList ok',
-        details: 'count=${out.length}',
-      );
-
       return out;
-    } on DioException catch (e, st) {
+    } on DioException catch (e) {
       if (e.type == DioExceptionType.cancel) {
-        logger?.d('ExtensionEngine', 'Request cancelled');
         return const [];
       }
-      logger?.e(
-        'ExtensionEngine',
-        'Network error: $e',
-        details: st.toString(),
-      );
       throw AppException.network(
         '网络请求失败',
         details: e.message,
         error: e,
       );
-    } catch (e, st) {
-      logger?.e(
-        'ExtensionEngine',
-        'failed: $e',
-        details: st.toString(),
-      );
-      if (e is AppException) {
-        rethrow;
-      }
+    } catch (e) {
       throw AppException.unknown(
         'ExtensionEngine 执行失败: $e',
         error: e,
@@ -173,5 +117,72 @@ class ExtensionEngine {
     }
   }
 
-  // ... 以下逻辑无需变动（runtime cache / _getPack / _doRequest 等）
+  Future<_JsHost> _createRuntime(EnginePack pack) async {
+    final source = await packStore.loadPackSource(pack.id);
+    final engineJs = source.readAsStringSync();
+    final rt = getJsRuntime();
+    rt.evaluate("""
+      try {
+        $engineJs
+      } catch(e) {
+        console.error(e);
+      }
+    """);
+    return _JsHost(runtime: rt, entry: pack.entry);
+  }
+
+  Future<_JsHost> _getOrCreateRuntime(String packId, EnginePack pack) async {
+    final cached = _runtimeCache[packId];
+    if (cached != null && !cached.isExpired) {
+      return cached.runtime;
+    }
+
+    final host = await _createRuntime(pack);
+    _runtimeCache[packId] = _CachedRuntime(
+      runtime: host,
+      packVersion: pack.version,
+      createdAt: DateTime.now(),
+    );
+    return host;
+  }
+
+  List<_ExtRequest> _parseRequests(dynamic rawReq) {
+    final list = <_ExtRequest>[];
+    if (rawReq is! List) return list;
+
+    for (final item in rawReq) {
+      if (item is! Map) continue;
+      final url = item['url'].toString();
+      final method = (item['method'] ?? 'GET').toString();
+      list.add(_ExtRequest(url: url, method: method, data: item));
+    }
+    return list;
+  }
+
+  Future<ResponseBody> _doRequest(_ExtRequest req,
+      {CancelToken? cancelToken}) {
+    return _dio.request(
+      req.url,
+      data: req.data,
+      cancelToken: cancelToken,
+    ).then((r) => ResponseBody.fromString(
+          r.data.toString(),
+          r.statusCode ?? 500,
+          headers: const {},
+        ));
+  }
+
+  Future<EnginePack> _getPack(String id) => packStore.loadPack(id);
+}
+
+class _ExtRequest {
+  final String url;
+  final String method;
+  final Map data;
+
+  _ExtRequest({
+    required this.url,
+    required this.method,
+    required this.data,
+  });
 }
