@@ -1,4 +1,10 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:provider/provider.dart';
+
+import '../../core/log/logger_store.dart';
 import '../../core/models/uni_wallpaper.dart';
 
 class ViewerPage extends StatefulWidget {
@@ -14,7 +20,24 @@ class ViewerPage extends StatefulWidget {
 }
 
 class _ViewerPageState extends State<ViewerPage> {
+  static const _tag = 'ViewerPage';
+
   double _dragOffset = 0;
+
+  @override
+  void initState() {
+    super.initState();
+
+    _log(
+      'Open',
+      details:
+          'id=${widget.wallpaper.id}\nurl=${widget.wallpaper.fullUrl}',
+    );
+  }
+
+  // -------------------------
+  // 手势关闭
+  // -------------------------
 
   void _onVerticalDragUpdate(DragUpdateDetails d) {
     setState(() {
@@ -31,9 +54,55 @@ class _ViewerPageState extends State<ViewerPage> {
     }
   }
 
+  // -------------------------
+  // Headers
+  // -------------------------
+
+  Map<String, String> _headersForUrl(String url) {
+    if (widget.wallpaper.headers != null &&
+        widget.wallpaper.headers!.isNotEmpty) {
+      return widget.wallpaper.headers!;
+    }
+
+    try {
+      final uri = Uri.parse(url);
+      final origin = '${uri.scheme}://${uri.host}/';
+
+      return {
+        'Referer': origin,
+        'User-Agent':
+            'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Mobile Safari/537.36',
+      };
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  // -------------------------
+  // 日志
+  // -------------------------
+
+  void _log(String msg, {String? details}) {
+    try {
+      context.read<LoggerStore>().d(_tag, msg, details: details);
+    } catch (_) {}
+  }
+
+  void _logErr(String msg, {String? details}) {
+    try {
+      context.read<LoggerStore>().e(_tag, msg, details: details);
+    } catch (_) {}
+  }
+
+  // -------------------------
+  // UI
+  // -------------------------
+
   @override
   Widget build(BuildContext context) {
     final w = widget.wallpaper;
+
+    final heroTag = w.id.isNotEmpty ? w.id : w.fullUrl;
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -42,33 +111,57 @@ class _ViewerPageState extends State<ViewerPage> {
         onVerticalDragEnd: _onVerticalDragEnd,
         child: Stack(
           children: [
-            /// 图片层
+            // 图片
             Positioned.fill(
               top: _dragOffset,
-              child: InteractiveViewer(
-                minScale: 1,
-                maxScale: 4,
-                child: Center(
-                  child: Image.network(
-                    w.imageUrl,
-                    fit: BoxFit.contain,
+              child: Center(
+                child: Hero(
+                  tag: heroTag,
+                  child: InteractiveViewer(
+                    minScale: 0.5,
+                    maxScale: 4.0,
+                    child: CachedNetworkImage(
+                      imageUrl: w.fullUrl,
+                      httpHeaders: _headersForUrl(w.fullUrl),
+                      fit: BoxFit.contain,
+                      placeholder: (_, __) => const Center(
+                        child: CircularProgressIndicator(
+                          color: Colors.white,
+                        ),
+                      ),
+                      errorWidget: (_, __, error) {
+                        _logErr(
+                          'Load error',
+                          details:
+                              'url=${w.fullUrl}\nerror=$error',
+                        );
+                        return const Icon(
+                          Icons.broken_image,
+                          color: Colors.white54,
+                          size: 64,
+                        );
+                      },
+                    ),
                   ),
                 ),
               ),
             ),
 
-            /// 顶部返回
+            // 顶部栏
             SafeArea(
-              child: Align(
-                alignment: Alignment.topLeft,
-                child: IconButton(
-                  icon: const Icon(Icons.arrow_back, color: Colors.white),
-                  onPressed: () => Navigator.pop(context),
+              child: AppBar(
+                backgroundColor: Colors.black.withOpacity(0.3),
+                elevation: 0,
+                leading: const BackButton(color: Colors.white),
+                title: Text(
+                  '${w.width} × ${w.height}',
+                  style: const TextStyle(fontSize: 13),
                 ),
+                centerTitle: true,
               ),
             ),
 
-            /// 底部信息区
+            // 底部信息
             Positioned(
               left: 0,
               right: 0,
@@ -93,6 +186,8 @@ class _InfoPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final w = wallpaper;
+
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
       decoration: BoxDecoration(
@@ -106,23 +201,15 @@ class _InfoPanel extends StatelessWidget {
         ),
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (wallpaper.title != null)
+          if (w.uploader != null)
             Text(
-              wallpaper.title!,
+              'by ${w.uploader}',
               style: const TextStyle(
-                color: Colors.white,
-                fontSize: 18,
-                fontWeight: FontWeight.w600,
+                color: Colors.white70,
               ),
-            ),
-
-          if (wallpaper.author != null)
-            Text(
-              "by ${wallpaper.author}",
-              style: const TextStyle(color: Colors.white70),
             ),
 
           const SizedBox(height: 6),
@@ -130,21 +217,14 @@ class _InfoPanel extends StatelessWidget {
           Wrap(
             spacing: 12,
             children: [
-              if (wallpaper.sourceName != null)
-                _Meta(wallpaper.sourceName!),
-
-              if (wallpaper.width != null &&
-                  wallpaper.height != null)
-                _Meta("${wallpaper.width} × ${wallpaper.height}"),
-
-              if (wallpaper.size != null)
-                _Meta(_formatSize(wallpaper.size!)),
+              _Meta('${w.width} × ${w.height}'),
+              if (w.tags.isNotEmpty) _Meta(w.tags.take(3).join(', ')),
             ],
           ),
 
           const SizedBox(height: 12),
 
-          _ActionRow(wallpaper: wallpaper),
+          const _ActionRow(),
         ],
       ),
     );
@@ -156,19 +236,17 @@ class _InfoPanel extends StatelessWidget {
 --------------------------------*/
 
 class _ActionRow extends StatelessWidget {
-  final UniWallpaper wallpaper;
-
-  const _ActionRow({required this.wallpaper});
+  const _ActionRow();
 
   @override
   Widget build(BuildContext context) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceAround,
       children: const [
-        _Action(icon: Icons.download, label: "下载"),
-        _Action(icon: Icons.wallpaper, label: "设为壁纸"),
-        _Action(icon: Icons.favorite_border, label: "收藏"),
-        _Action(icon: Icons.share, label: "分享"),
+        _Action(icon: Icons.download, label: '下载'),
+        _Action(icon: Icons.wallpaper, label: '设为壁纸'),
+        _Action(icon: Icons.favorite_border, label: '收藏'),
+        _Action(icon: Icons.share, label: '分享'),
       ],
     );
   }
@@ -192,7 +270,10 @@ class _Action extends StatelessWidget {
         const SizedBox(height: 4),
         Text(
           label,
-          style: const TextStyle(color: Colors.white70, fontSize: 12),
+          style: const TextStyle(
+            color: Colors.white70,
+            fontSize: 12,
+          ),
         ),
       ],
     );
@@ -212,15 +293,10 @@ class _Meta extends StatelessWidget {
   Widget build(BuildContext context) {
     return Text(
       text,
-      style: const TextStyle(color: Colors.white70, fontSize: 12),
+      style: const TextStyle(
+        color: Colors.white70,
+        fontSize: 12,
+      ),
     );
   }
-}
-
-String _formatSize(int bytes) {
-  if (bytes < 1024) return "$bytes B";
-  if (bytes < 1024 * 1024) {
-    return "${(bytes / 1024).toStringAsFixed(1)} KB";
-  }
-  return "${(bytes / 1024 / 1024).toStringAsFixed(1)} MB";
 }
